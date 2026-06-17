@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { signIn, useSession } from "next-auth/react";
+import { useState } from "react";
+import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from '@supabase/supabase-js';
@@ -12,72 +12,70 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function LoginPage() {
   const router = useRouter();
-  const { data: session, status } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (status === "authenticated" && session?.user) {
-      checkAndRedirect();
-    }
-  }, [status, session]);
-
-  const checkAndRedirect = async () => {
-    const userRole = session?.user?.role;
-    
-    // Check if employee needs to change password
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("password_changed")
-      .eq("id", session?.user?.id)
-      .single();
-    
-    const needsPasswordChange = profile?.password_changed === false || profile?.password_changed === null;
-    const isEmployee = userRole === "employee";
-    
-    if (needsPasswordChange && isEmployee) {
-      // Employee on first login - force password change
-      router.push("/change-password");
-    } else if (userRole === "owner") {
-      // Owner goes directly to dashboard
-      router.push("/owner-dashboard");
-    } else {
-      // Existing employee goes to employee dashboard
-      router.push("/employee-dashboard");
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
 
-    if (result?.error) {
-      setError("Invalid email or password");
+      if (result?.error) {
+        setError("Invalid email or password");
+        setLoading(false);
+        return;
+      }
+
+      if (result?.ok) {
+        // Get session to check role
+        const res = await fetch("/api/auth/session");
+        const session = await res.json();
+        
+        if (!session?.user) {
+          setError("Session not found");
+          setLoading(false);
+          return;
+        }
+
+        // Check if employee needs to change password
+        // After successful login, check if employee needs to change password
+// After successful login, check if employee needs to change password
+const { data: profile } = await supabase
+  .from("profiles")
+  .select("password_changed, role")
+  .eq("id", session.user.id)
+  .single();
+
+
+const needsPasswordChange = (profile?.password_changed === false || profile?.password_changed === null);
+const isEmployee = session.user?.role === "employee";
+
+if (needsPasswordChange && isEmployee) {
+  // First login with temporary password - show change password
+  router.push("/change-password");
+} else if (session.user?.role === "owner") {
+  // Owner goes to owner dashboard
+  router.push("/owner-dashboard");
+} else {
+  // Employee with password already changed - goes directly to dashboard
+  router.push("/employee-dashboard");
+}
+      }
+    } catch (err) {
+      setError("Something went wrong");
       setLoading(false);
     }
   };
-
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50">
-        <div className="text-center">
-          <div className="inline-block h-12 w-12 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"></div>
-          <p className="mt-4 text-emerald-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50">

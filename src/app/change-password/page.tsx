@@ -24,26 +24,31 @@ export default function ChangePasswordPage() {
       router.push("/login");
       return;
     }
-    // If already changed password, redirect to dashboard
-    checkIfPasswordAlreadyChanged();
-  }, [status, router]);
+    
+    if (status === "authenticated" && session?.user?.id) {
+      checkIfPasswordAlreadyChanged();
+    }
+  }, [status, router, session]);
 
   const checkIfPasswordAlreadyChanged = async () => {
     if (!session?.user?.id) return;
     
     const { data: profile } = await supabase
       .from("profiles")
-      .select("password_changed")
+      .select("password_changed, role")
       .eq("id", session.user.id)
       .single();
     
+    // If owner, redirect to owner dashboard
+    if (profile?.role === "owner") {
+      router.push("/owner-dashboard");
+      return;
+    }
+    
     // If password already changed, redirect to dashboard
     if (profile?.password_changed === true) {
-      if (session?.user?.role === "owner") {
-        router.push("/owner-dashboard");
-      } else {
-        router.push("/employee-dashboard");
-      }
+      router.push("/employee-dashboard");
+      return;
     }
   };
 
@@ -79,20 +84,19 @@ export default function ChangePasswordPage() {
     }
 
     try {
-      // Update password in Supabase Auth
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword
-      });
-
-      if (error) throw error;
-
-      // Mark password as changed in profiles table
-      await supabase
+      // ✅ Update password directly in profiles table (NO Supabase Auth)
+      const { error: updateError } = await supabase
         .from("profiles")
-        .update({ password_changed: true })
+        .update({ 
+          password: newPassword,
+          password_changed: true 
+        })
         .eq("id", session.user.id);
 
-      setSuccess("Password changed successfully! Redirecting to dashboard...");
+      if (updateError) throw updateError;
+
+      setSuccess("✅ Password changed successfully! Redirecting to dashboard...");
+
       setTimeout(() => {
         if (session?.user?.role === "owner") {
           router.push("/owner-dashboard");
@@ -101,9 +105,9 @@ export default function ChangePasswordPage() {
         }
       }, 2000);
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || "Something went wrong");
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

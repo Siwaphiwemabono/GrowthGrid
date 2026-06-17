@@ -10,6 +10,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
+      id: "credentials",
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
@@ -17,41 +18,58 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
+          console.log("❌ No credentials provided");
           return null;
         }
 
-        try {
-          // Sign in with Supabase Auth
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email: credentials.email,
-            password: credentials.password,
-          });
+        console.log("🔍 Login attempt for:", credentials.email);
 
-          if (error || !data.user) {
-            console.error("Supabase auth error:", error?.message);
+        try {
+          // ✅ DIRECT CHECK - Query profiles table (NO Supabase Auth)
+          const { data: profile, error } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("email", credentials.email)
+            .single();
+
+          if (error) {
+            console.log("❌ Database error:", error.message);
             return null;
           }
 
-          // Get user profile from profiles table
-          const { data: profile, error: profileError } = await supabase
-            .from("profiles")
-            .select("*")
-            .eq("id", data.user.id)
-            .single();
-
-          if (profileError) {
-            console.error("Profile fetch error:", profileError.message);
+          if (!profile) {
+            console.log("❌ User not found in profiles:", credentials.email);
+            return null;
           }
 
-          // Return user object for NextAuth session
+          console.log("✅ User found:", profile.email);
+          console.log("🔑 Password in DB:", profile.password ? "✅ EXISTS" : "❌ NULL");
+          console.log("👤 Role:", profile.role);
+
+          // ✅ Check if password matches (plain text comparison)
+          if (!profile.password) {
+            console.log("❌ No password stored for user");
+            return null;
+          }
+
+          if (profile.password !== credentials.password) {
+            console.log("❌ Password mismatch!");
+            console.log("   Provided:", credentials.password);
+            console.log("   Stored:", profile.password);
+            return null;
+          }
+
+          console.log("✅ Password verified successfully!");
+          console.log("✅ Login successful for:", credentials.email);
+
           return {
-            id: data.user.id,
-            name: profile?.name || data.user.email?.split('@')[0] || "User",
-            email: data.user.email,
-            role: profile?.role || "employee",
+            id: profile.id,
+            name: `${profile.name} ${profile.surname}`,
+            email: profile.email,
+            role: profile.role || "employee",
           };
         } catch (err) {
-          console.error("Authorization error:", err);
+          console.error("❌ Auth error:", err);
           return null;
         }
       },

@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [step, setStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -28,11 +28,12 @@ export default function RegisterPage() {
   });
 
   const industries = [
-    { value: "retail", label: "Retail", description: "Stock reminders, inventory tracking" },
-    { value: "services", label: "Services", description: "Client follow-ups, appointment scheduling" },
-    { value: "construction", label: "Construction", description: "Project tasks, deadline management" },
-    { value: "freelance", label: "Freelance", description: "Invoice tracking, client communication" },
-    { value: "other", label: "Other", description: "Custom action suggestions" },
+    { value: "retail", label: "Retail Store", description: "Inventory and sales monitoring" },
+    { value: "restaurant", label: "Restaurant", description: "Orders, suppliers and customer activity" },
+    { value: "salon", label: "Salon", description: "Bookings and customer retention" },
+    { value: "consulting", label: "Consulting", description: "Client follow-ups and proposals" },
+    { value: "construction", label: "Construction", description: "Project deadlines and materials" },
+    { value: "other", label: "Other", description: "General business actions" },
   ];
 
   const businessSizes = [
@@ -43,15 +44,8 @@ export default function RegisterPage() {
     "50+ employees",
   ];
 
-  useEffect(() => {
-    if (status === "authenticated") {
-      if (session?.user?.role === "owner") {
-        router.push("/owner-dashboard");
-      } else {
-        router.push("/employee-dashboard");
-      }
-    }
-  }, [router, session, status]);
+  // ✅ REMOVED THE AUTO-REDIRECT useEffect
+  // Users can always access the register page regardless of login status
 
   if (status === "loading") {
     return (
@@ -80,7 +74,6 @@ export default function RegisterPage() {
     setError("");
     setSuccess("");
 
-    // Validation
     if (!formData.name || !formData.surname || !formData.email || !formData.password) {
       setError("Please fill in all account fields");
       setLoading(false);
@@ -121,6 +114,7 @@ export default function RegisterPage() {
           businessName: formData.businessName,
           industry: formData.industry,
           businessSize: formData.businessSize,
+          password_changed: false, // ✅ ADDED THIS
         }),
       });
 

@@ -16,33 +16,50 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
+          console.log("❌ No credentials provided");
           return null;
         }
 
+        console.log("🔍 Login attempt for:", credentials.email);
+
         try {
-          // First, check if user exists in profiles table
-          const { data: profile, error: profileError } = await supabase
+          // ✅ DIRECT CHECK - Query profiles table (NO Supabase Auth)
+          const { data: profile, error } = await supabase
             .from("profiles")
             .select("*")
             .eq("email", credentials.email)
             .single();
 
-          if (profileError || !profile) {
-            console.log("User not found in profiles:", credentials.email);
+          if (error) {
+            console.log("❌ Database error:", error.message);
             return null;
           }
 
-          // Since Supabase Auth might not be used, we need to verify password
-          // For now, we'll use a simple check (in production, use bcrypt)
-          // You should store hashed passwords in the profiles table
-          
-          // For demo purposes, we'll accept any password for existing users
-          // But ideally, you should add a password field to your profiles table
-          
-          // If you have a password field in profiles, use it:
-          // if (profile.password !== credentials.password) return null;
+          if (!profile) {
+            console.log("❌ User not found in profiles:", credentials.email);
+            return null;
+          }
 
-          // Return user object for NextAuth session
+          console.log("✅ User found:", profile.email);
+          console.log("🔑 Password in DB:", profile.password);
+          console.log("👤 Role:", profile.role);
+
+          // ✅ Check if password matches (plain text comparison)
+          if (!profile.password) {
+            console.log("❌ No password stored for user");
+            return null;
+          }
+
+          if (profile.password !== credentials.password) {
+            console.log("❌ Password mismatch!");
+            console.log("   Provided:", credentials.password);
+            console.log("   Stored:", profile.password);
+            return null;
+          }
+
+          console.log("✅ Password verified successfully!");
+          console.log("✅ Login successful for:", credentials.email);
+
           return {
             id: profile.id,
             name: `${profile.name} ${profile.surname}`,
@@ -50,7 +67,7 @@ export const authOptions: NextAuthOptions = {
             role: profile.role || "employee",
           };
         } catch (err) {
-          console.error("Auth error:", err);
+          console.error("❌ Auth error:", err);
           return null;
         }
       },
