@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+// Import types from your schema
+import { type RegisterRequest } from "@/db/schema";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -44,9 +46,6 @@ export default function RegisterPage() {
     "50+ employees",
   ];
 
-  // ✅ REMOVED THE AUTO-REDIRECT useEffect
-  // Users can always access the register page regardless of login status
-
   if (status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50">
@@ -58,7 +57,7 @@ export default function RegisterPage() {
     );
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
@@ -68,12 +67,13 @@ export default function RegisterPage() {
     setSuccess("");
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     setSuccess("");
 
+    // Validation
     if (!formData.name || !formData.surname || !formData.email || !formData.password) {
       setError("Please fill in all account fields");
       setLoading(false);
@@ -100,22 +100,26 @@ export default function RegisterPage() {
     }
 
     try {
+      // Prepare the request data with proper types
+      const requestData: RegisterRequest = {
+        name: formData.name,
+        surname: formData.surname,
+        email: formData.email,
+        password: formData.password,
+        businessName: formData.businessName,
+        industry: formData.industry,
+        businessSize: formData.businessSize || "Just me (Solo)",
+        // These are optional fields that can be added later
+        // hasEmployees: "no",
+        // employeeEmails: "",
+      };
+
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          name: formData.name,
-          surname: formData.surname,
-          email: formData.email,
-          password: formData.password,
-          role: "owner",
-          businessName: formData.businessName,
-          industry: formData.industry,
-          businessSize: formData.businessSize,
-          password_changed: false, // ✅ ADDED THIS
-        }),
+        body: JSON.stringify(requestData),
       });
 
       const data = await response.json();
@@ -277,10 +281,11 @@ export default function RegisterPage() {
                   <div className="space-y-5">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <label htmlFor="name" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Name *
                         </label>
                         <input
+                          id="name"
                           type="text"
                           name="name"
                           value={formData.name}
@@ -288,13 +293,15 @@ export default function RegisterPage() {
                           placeholder="John"
                           className="w-full rounded-xl border border-gray-300 bg-white/50 px-4 py-3 text-gray-900 transition-all duration-200 placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white"
                           required
+                          aria-label="First Name"
                         />
                       </div>
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <label htmlFor="surname" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Surname *
                         </label>
                         <input
+                          id="surname"
                           type="text"
                           name="surname"
                           value={formData.surname}
@@ -302,15 +309,17 @@ export default function RegisterPage() {
                           placeholder="Doe"
                           className="w-full rounded-xl border border-gray-300 bg-white/50 px-4 py-3 text-gray-900 transition-all duration-200 placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-gray-700 dark:bg-gray-800/50 dark:text-white"
                           required
+                          aria-label="Last Name"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="email" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Email Address *
                       </label>
                       <input
+                        id="email"
                         type="email"
                         name="email"
                         value={formData.email}
@@ -322,11 +331,12 @@ export default function RegisterPage() {
                     </div>
 
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="password" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Password *
                       </label>
                       <div className="relative">
                         <input
+                          id="password"
                           type={showPassword ? "text" : "password"}
                           name="password"
                           value={formData.password}
@@ -339,6 +349,7 @@ export default function RegisterPage() {
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          aria-label={showPassword ? "Hide password" : "Show password"}
                         >
                           {showPassword ? "👁️" : "🔒"}
                         </button>
@@ -347,11 +358,12 @@ export default function RegisterPage() {
                     </div>
 
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="confirmPassword" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Confirm Password *
                       </label>
                       <div className="relative">
                         <input
+                          id="confirmPassword"
                           type={showConfirmPassword ? "text" : "password"}
                           name="confirmPassword"
                           value={formData.confirmPassword}
@@ -364,6 +376,7 @@ export default function RegisterPage() {
                           type="button"
                           onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
                         >
                           {showConfirmPassword ? "👁️" : "🔒"}
                         </button>
@@ -376,10 +389,11 @@ export default function RegisterPage() {
                 {step === 2 && (
                   <div className="space-y-5">
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="businessName" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Business Name *
                       </label>
                       <input
+                        id="businessName"
                         type="text"
                         name="businessName"
                         value={formData.businessName}
@@ -391,10 +405,11 @@ export default function RegisterPage() {
                     </div>
 
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="industry" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Industry *
                       </label>
                       <select
+                        id="industry"
                         name="industry"
                         value={formData.industry}
                         onChange={handleChange}
@@ -411,10 +426,11 @@ export default function RegisterPage() {
                     </div>
 
                     <div>
-                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label htmlFor="businessSize" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Business Size
                       </label>
                       <select
+                        id="businessSize"
                         name="businessSize"
                         value={formData.businessSize}
                         onChange={handleChange}

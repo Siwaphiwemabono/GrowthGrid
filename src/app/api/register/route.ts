@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     
     console.log("📧 Email:", body.email);
     console.log("👤 Name:", body.name);
-    console.log("🔑 Password provided:", body.password ? "YES" : "NO");
+    console.log("🔑 Password provided:", body.password ? "YES (length: " + body.password.length + ")" : "NO");
     
     const {
       name,
@@ -62,29 +62,28 @@ export async function POST(req: Request) {
     const userId = crypto.randomUUID();
     const businessId = crypto.randomUUID();
 
-    // ✅ STEP 1: Create business FIRST with snake_case column names
-    const { data: businessData, error: businessError } = await db
+    // ✅ STEP 1: Create business FIRST
+    const { error: businessError } = await db
       .from("businesses")
       .insert({
         id: businessId,
-        user_id: userId,                // ✅ Changed from userId
-        business_name: businessName,    // ✅ Changed from businessName
+        userId: userId,
+        businessName: businessName,
         industry: industry,
-        business_size: businessSize || "Just me (Solo)", // ✅ Changed from businessSize
-      })
-      .select();
+        businessSize: businessSize || "Just me (Solo)",
+      });
 
     if (businessError) {
       console.error("❌ Business error:", businessError);
       return NextResponse.json(
-        { error: `Failed to create business: ${businessError.message}` },
+        { error: businessError.message || "Failed to create business" },
         { status: 400 }
       );
     }
 
     console.log("✅ Business created successfully!");
 
-    // ✅ STEP 2: Create profile with snake_case column names
+    // ✅ STEP 2: Create profile with the business_id
     const { data: profileData, error: profileError } = await db
       .from("profiles")
       .insert({
@@ -95,13 +94,13 @@ export async function POST(req: Request) {
         password: password,
         password_changed: false,
         role: "owner",
-        business_id: businessId,        // ✅ Already snake_case
+        business_id: businessId,  // Now this exists!
       })
       .select();
 
     if (profileError) {
       console.error("❌ Profile insert error:", profileError);
-      // Rollback: Delete the business if profile creation fails
+      // Optional: Delete the business if profile creation fails
       await db.from("businesses").delete().eq("id", businessId);
       return NextResponse.json({ error: profileError.message }, { status: 400 });
     }
@@ -113,9 +112,9 @@ export async function POST(req: Request) {
       .from("employees")
       .insert({
         id: crypto.randomUUID(),
-        business_owner_id: userId,      // ✅ Changed from businessOwnerId
-        business_id: businessId,        // ✅ Already snake_case
-        profile_id: userId,             // ✅ Changed from profileId
+        businessOwnerId: userId,
+        businessId: businessId,
+        profileId: userId,
         email: email,
         name: name,
         surname: surname,
@@ -124,6 +123,7 @@ export async function POST(req: Request) {
 
     if (employeeError) {
       console.error("❌ Employee error:", employeeError);
+      // Don't fail registration if employee creation fails
     } else {
       console.log("✅ Employee created successfully!");
     }
@@ -138,9 +138,9 @@ export async function POST(req: Request) {
       if (emails.length > 0) {
         const employeesData = emails.map((email: string) => ({
           id: crypto.randomUUID(),
-          business_owner_id: userId,
-          business_id: businessId,
-          profile_id: null,
+          businessOwnerId: userId,
+          businessId: businessId,
+          profileId: null,
           email: email,
           name: "",
           surname: "",

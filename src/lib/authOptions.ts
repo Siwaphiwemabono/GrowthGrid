@@ -1,10 +1,8 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from "@/lib/supabase";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const getSupabase = () => getSupabaseClient();
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -24,6 +22,7 @@ export const authOptions: NextAuthOptions = {
 
         try {
           // ✅ DIRECT CHECK - Query profiles table (NO Supabase Auth)
+          const supabase = getSupabase();
           const { data: profile, error } = await supabase
             .from("profiles")
             .select("*")

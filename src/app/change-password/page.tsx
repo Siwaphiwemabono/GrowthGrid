@@ -1,13 +1,10 @@
+// src/app/change-password/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { db } from "@/db/db";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -33,11 +30,16 @@ export default function ChangePasswordPage() {
   const checkIfPasswordAlreadyChanged = async () => {
     if (!session?.user?.id) return;
     
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await db
       .from("profiles")
       .select("password_changed, role")
       .eq("id", session.user.id)
       .single();
+    
+    if (profileError) {
+      console.error("❌ Profile fetch error:", profileError);
+      return;
+    }
     
     // If owner, redirect to owner dashboard
     if (profile?.role === "owner") {
@@ -65,7 +67,7 @@ export default function ChangePasswordPage() {
 
   if (!session) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -84,8 +86,8 @@ export default function ChangePasswordPage() {
     }
 
     try {
-      // ✅ Update password directly in profiles table (NO Supabase Auth)
-      const { error: updateError } = await supabase
+      // Update password directly in profiles table
+      const { error: updateError } = await db
         .from("profiles")
         .update({ 
           password: newPassword,
@@ -93,7 +95,10 @@ export default function ChangePasswordPage() {
         })
         .eq("id", session.user.id);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("❌ Password update error:", updateError);
+        throw new Error(updateError.message);
+      }
 
       setSuccess("✅ Password changed successfully! Redirecting to dashboard...");
 
@@ -140,28 +145,39 @@ export default function ChangePasswordPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+            <label htmlFor="new-password" className="block text-sm font-medium text-gray-700 mb-1">
+              New Password
+            </label>
             <div className="relative">
               <input
+                id="new-password"
                 type={showPassword ? "text" : "password"}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
                 required
+                placeholder="Enter new password"
+                aria-describedby="password-hint"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Must be at least 8 characters</p>
+            <p id="password-hint" className="text-xs text-gray-500 mt-1">
+              Must be at least 8 characters
+            </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+            <label htmlFor="confirm-password" className="block text-sm font-medium text-gray-700 mb-1">
+              Confirm Password
+            </label>
             <div className="relative">
               <input
+                id="confirm-password"
                 type={showPassword ? "text" : "password"}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
                 required
+                placeholder="Confirm your new password"
               />
             </div>
           </div>
@@ -172,9 +188,12 @@ export default function ChangePasswordPage() {
               id="showPassword"
               checked={showPassword}
               onChange={() => setShowPassword(!showPassword)}
-              className="rounded border-gray-300"
+              className="rounded border-gray-300 focus:ring-emerald-500"
+              aria-label="Show passwords"
             />
-            <label htmlFor="showPassword" className="text-sm text-gray-600">Show passwords</label>
+            <label htmlFor="showPassword" className="text-sm text-gray-600 cursor-pointer">
+              Show passwords
+            </label>
           </div>
 
           <button

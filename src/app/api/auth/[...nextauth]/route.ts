@@ -1,11 +1,8 @@
+// src/app/api/auth/[...nextauth]/route.ts
 import NextAuth from "next-auth";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { db } from "@/db/db";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -25,8 +22,8 @@ export const authOptions: NextAuthOptions = {
         console.log("🔍 Login attempt for:", credentials.email);
 
         try {
-          // ✅ DIRECT CHECK - Query profiles table (NO Supabase Auth)
-          const { data: profile, error } = await supabase
+          // Query profiles table directly using db
+          const { data: profile, error } = await db
             .from("profiles")
             .select("*")
             .eq("email", credentials.email)
@@ -43,10 +40,9 @@ export const authOptions: NextAuthOptions = {
           }
 
           console.log("✅ User found:", profile.email);
-          console.log("🔑 Password in DB:", profile.password ? "✅ EXISTS" : "❌ NULL");
           console.log("👤 Role:", profile.role);
 
-          // ✅ Check if password matches (plain text comparison)
+          // Check if password matches (plain text comparison)
           if (!profile.password) {
             console.log("❌ No password stored for user");
             return null;
@@ -54,8 +50,6 @@ export const authOptions: NextAuthOptions = {
 
           if (profile.password !== credentials.password) {
             console.log("❌ Password mismatch!");
-            console.log("   Provided:", credentials.password);
-            console.log("   Stored:", profile.password);
             return null;
           }
 

@@ -1,41 +1,52 @@
+// src/app/owner-dashboard/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
-import { createClient } from '@supabase/supabase-js';
+import { db } from "@/db/db";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-interface Task {
-  id: number;
-  title: string;
-  assigned_to: string;
-  status: string;
-  priority: string;
-  due_date: string;
+// Types from your schema - Updated to match snake_case column names
+interface Business {
+  id: string;
+  user_id: string;
+  business_name: string;
+  industry: string;
+  business_size: string | null;
   created_at: string;
 }
 
 interface Employee {
   id: string;
+  business_owner_id: string;
+  business_id: string;
+  profile_id: string | null;
+  email: string;
   name: string;
   surname: string;
-  email: string;
   role: string;
+  created_at: string;
+}
+
+interface Task {
+  id: number;
   business_id: string;
+  title: string;
+  description: string | null;
+  assigned_to: string | null;
+  assigned_by: string | null;
+  source: string | null;
+  status: string | null;
+  priority: string | null;
+  due_date: string | null;
+  created_at: string;
+  completed_at: string | null;
+  industry: string | null;
+  assigned_to_email: string | null;
 }
 
-interface Business {
-  id: string;
-  business_name: string;
-  industry: string;
-  business_size: string;
-}
-
+// Extended types for the dashboard
 interface OwnerProfile {
   id: string;
   name: string;
@@ -43,6 +54,9 @@ interface OwnerProfile {
   email: string;
   role: string;
 }
+
+// ✅ FIXED: DashboardTask simply extends Task - no redeclared properties
+interface DashboardTask extends Task {}
 
 const INDUSTRY_TASKS: Record<string, string[]> = {
   retail: [
@@ -213,54 +227,65 @@ export default function OwnerDashboard() {
 
     try {
       // Fetch owner profile
-      const { data: ownerData } = await supabase
+      const { data: ownerData, error: ownerError } = await db
         .from("profiles")
         .select("*")
         .eq("id", userId)
         .single();
 
-      if (ownerData) {
+      if (ownerError) {
+        console.error("❌ Owner fetch error:", ownerError);
+      } else if (ownerData) {
         setOwner(ownerData);
       }
 
-      // Fetch business
-      const { data: businessData } = await supabase
+      // Fetch business - using snake_case
+      const { data: businessData, error: businessError } = await db
         .from("businesses")
         .select("*")
         .eq("user_id", userId)
         .single();
 
-      if (businessData) {
+      if (businessError) {
+        console.error("❌ Business fetch error:", businessError);
+      } else if (businessData) {
         setBusiness(businessData);
         await ensureTaskPool(businessData.industry, userId);
       }
 
-      // Fetch tasks for this business
-      const { data: tasksData } = await supabase
-        .from("tasks")
-        .select("*")
-        .eq("business_id", businessData?.id)
-        .order("created_at", { ascending: false });
+      // Fetch tasks for this business - using snake_case
+      if (businessData?.id) {
+        const { data: tasksData, error: tasksError } = await db
+          .from("tasks")
+          .select("*")
+          .eq("business_id", businessData.id)
+          .order("created_at", { ascending: false });
 
-      if (tasksData) {
-        setAvailableTasks(tasksData.filter(t => t.status === "Available"));
-        setActiveTasks(tasksData.filter(t => t.status === "In Progress"));
-        setCompletedTasks(tasksData.filter(t => t.status === "Completed").slice(0, 10));
+        if (tasksError) {
+          console.error("❌ Tasks fetch error:", tasksError);
+        } else if (tasksData) {
+          setAvailableTasks(tasksData.filter((t: Task) => t.status === "Available"));
+          setActiveTasks(tasksData.filter((t: Task) => t.status === "In Progress"));
+          setCompletedTasks(tasksData.filter((t: Task) => t.status === "Completed").slice(0, 10));
+        }
       }
 
-      // ✅ Fetch ONLY employees for this business
-      const { data: employeesData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("role", "employee")
-        .eq("business_id", businessData?.id);
+      // Fetch employees for this business - using snake_case
+      if (businessData?.id) {
+        const { data: employeesData, error: employeesError } = await db
+          .from("employees")
+          .select("*")
+          .eq("business_id", businessData.id);
 
-      if (employeesData) {
-        setEmployees(employeesData);
+        if (employeesError) {
+          console.error("❌ Employees fetch error:", employeesError);
+        } else if (employeesData) {
+          setEmployees(employeesData);
+        }
       }
 
     } catch (err) {
-      console.error(err);
+      console.error("❌ Fetch error:", err);
     }
 
     setLoading(false);
@@ -268,7 +293,7 @@ export default function OwnerDashboard() {
 
   const ensureTaskPool = async (industry: string, userId: string) => {
     try {
-      const { data: businessData } = await supabase
+      const { data: businessData } = await db
         .from("businesses")
         .select("id")
         .eq("user_id", userId)
@@ -278,7 +303,7 @@ export default function OwnerDashboard() {
 
       const businessId = businessData.id;
 
-      const { data: existing } = await supabase
+      const { data: existing } = await db
         .from("tasks")
         .select("id")
         .eq("business_id", businessId)
@@ -297,9 +322,13 @@ export default function OwnerDashboard() {
         created_at: new Date().toISOString(),
       }));
 
-      await supabase.from("tasks").insert(taskPool);
+      const { error: insertError } = await db.from("tasks").insert(taskPool);
+      
+      if (insertError) {
+        console.error("❌ Task pool insert error:", insertError);
+      }
     } catch (err) {
-      console.error(err);
+      console.error("❌ Ensure task pool error:", err);
     }
   };
 
@@ -313,20 +342,25 @@ export default function OwnerDashboard() {
     const employee = employees.find(e => e.id === selectedEmployee);
 
     try {
-      await supabase
+      const { error: updateError } = await db
         .from("tasks")
         .update({
-          assigned_to: `${employee?.name} ${employee?.surname}`,
+          assigned_to: employee?.id,
+          assigned_to_email: employee?.email,
           status: "In Progress",
-          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         })
         .eq("id", selectedTask.id);
 
-      setMessage({ type: "success", text: `✅ Task assigned to ${employee?.name}` });
-      setShowAssignModal(false);
-      setSelectedTask(null);
-      setSelectedEmployee("");
-      fetchAllData();
+      if (updateError) {
+        setMessage({ type: "error", text: updateError.message });
+      } else {
+        setMessage({ type: "success", text: `✅ Task assigned to ${employee?.name}` });
+        setShowAssignModal(false);
+        setSelectedTask(null);
+        setSelectedEmployee("");
+        fetchAllData();
+      }
     } catch (err: any) {
       setMessage({ type: "error", text: err.message });
     }
@@ -335,7 +369,7 @@ export default function OwnerDashboard() {
 
   const completeTask = async (taskId: number) => {
     try {
-      await supabase
+      const { error: updateError } = await db
         .from("tasks")
         .update({ 
           status: "Completed",
@@ -343,14 +377,18 @@ export default function OwnerDashboard() {
         })
         .eq("id", taskId);
       
-      setMessage({ type: "success", text: "✅ Task completed!" });
-      fetchAllData();
+      if (updateError) {
+        setMessage({ type: "error", text: updateError.message });
+      } else {
+        setMessage({ type: "success", text: "✅ Task completed!" });
+        fetchAllData();
+      }
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to complete task" });
     }
   };
 
- const handleAddEmployee = async () => {
+  const handleAddEmployee = async () => {
   if (!newEmployee.email || !newEmployee.name || !newEmployee.surname) {
     setMessage({ type: "error", text: "Please fill in all fields" });
     return;
@@ -361,24 +399,50 @@ export default function OwnerDashboard() {
 
   try {
     const userId = crypto.randomUUID();
-    
+
     // Get the business ID
-    const { data: businessData, error: businessError } = await supabase
+    const { data: businessData, error: businessError } = await db
       .from("businesses")
       .select("id")
       .eq("user_id", session?.user?.id)
       .single();
 
     if (businessError || !businessData) {
-      console.error("❌ Business error:", businessError);
-      setMessage({ type: "error", text: "No business found" });
+      console.error("❌ Business fetch error:", businessError);
+      setMessage({ 
+        type: "error", 
+        text: businessError?.message || "Unable to find business. Please refresh." 
+      });
+      setSubmitting(false);
+      return;
+    }
+
+    // ✅ FIXED: Check if email already exists - use .maybeSingle() instead of .single()
+    const { data: existingProfile, error: checkError } = await db
+      .from("profiles")
+      .select("email")
+      .eq("email", newEmployee.email)
+      .maybeSingle();
+
+    // If there's an error other than "not found", log it
+    if (checkError && checkError.code !== "PGRST116") {
+      console.error("❌ Check error:", checkError);
+    }
+
+    if (existingProfile) {
+      setMessage({ 
+        type: "error", 
+        text: `❌ Email "${newEmployee.email}" is already registered. Please use a different email.` 
+      });
+      setSubmitting(false);
       return;
     }
 
     console.log("📝 Creating employee with password:", tempPassword);
+    console.log("📝 Business ID:", businessData.id);
 
-    // ✅ Insert employee with password
-    const { data: insertedData, error: insertError } = await supabase
+    // Insert employee as a profile
+    const { data: insertedData, error: insertError } = await db
       .from("profiles")
       .insert({
         id: userId,
@@ -394,21 +458,38 @@ export default function OwnerDashboard() {
 
     if (insertError) {
       console.error("❌ Insert error:", insertError);
-      setMessage({ type: "error", text: insertError.message });
+      
+      let errorMessage = "Failed to create employee. Please try again.";
+      if (insertError.code === "23505") {
+        errorMessage = `❌ Email "${newEmployee.email}" is already registered. Please use a different email.`;
+      } else if (insertError.message) {
+        errorMessage = insertError.message;
+      }
+      
+      setMessage({ type: "error", text: errorMessage });
+      setSubmitting(false);
       return;
     }
 
-    console.log("✅ Employee created:", insertedData);
+    console.log("✅ Employee created successfully!");
 
-    // ✅ Verify the employee was created with password
-    const { data: verifyData } = await supabase
-      .from("profiles")
-      .select("id, email, password")
-      .eq("email", newEmployee.email)
-      .single();
+    // Create employee record
+    const { error: empError } = await db
+      .from("employees")
+      .insert({
+        id: crypto.randomUUID(),
+        business_owner_id: session?.user?.id,
+        business_id: businessData.id,
+        profile_id: userId,
+        email: newEmployee.email,
+        name: newEmployee.name,
+        surname: newEmployee.surname,
+        role: "employee",
+      });
 
-    console.log("🔑 Verify - Password stored:", verifyData?.password ? "YES" : "NO");
-    console.log("🔑 Password value:", verifyData?.password);
+    if (empError) {
+      console.error("❌ Employee record error:", empError);
+    }
 
     setNewEmployeeCredentials({
       email: newEmployee.email,
@@ -424,7 +505,6 @@ export default function OwnerDashboard() {
     setShowAddEmployee(false);
     fetchAllData();
     
-    // ✅ Set success message with the password
     setMessage({ 
       type: "success", 
       text: `✅ Employee ${newEmployee.name} added! Temporary password: ${tempPassword}` 
@@ -433,7 +513,10 @@ export default function OwnerDashboard() {
     
   } catch (err: any) {
     console.error("❌ Error:", err);
-    setMessage({ type: "error", text: err.message });
+    setMessage({ 
+      type: "error", 
+      text: err.message || "Something went wrong. Please try again." 
+    });
   }
   setSubmitting(false);
 };
@@ -466,6 +549,13 @@ export default function OwnerDashboard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50">
       
+      {/* CSS for progress bar - inline in component */}
+      <style>{`
+        .progress-bar {
+          transition: width 0.5s ease-in-out;
+        }
+      `}</style>
+
       {/* Navigation */}
       <nav className="bg-white/90 backdrop-blur-md border-b border-emerald-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -492,8 +582,19 @@ export default function OwnerDashboard() {
                 </div>
                 <span className="text-sm text-gray-700 font-medium">{ownerFullName}</span>
               </div>
-              <button onClick={handleLogout} className="px-3 py-1.5 text-sm bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition">Logout</button>
-              <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="md:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100">
+              <button 
+                type="button"
+                onClick={handleLogout} 
+                className="px-3 py-1.5 text-sm bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
+              >
+                Logout
+              </button>
+              <button 
+                type="button"
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)} 
+                className="md:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100"
+                aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+              >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   {mobileMenuOpen ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
                 </svg>
@@ -536,7 +637,10 @@ export default function OwnerDashboard() {
               </div>
             </div>
             <div className="mt-3 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${completionRate}%` }}></div>
+              <div 
+                className="h-full bg-emerald-500 rounded-full progress-bar"
+                style={{ width: `${completionRate}%` }}
+              ></div>
             </div>
           </div>
 
@@ -601,6 +705,7 @@ export default function OwnerDashboard() {
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-4 mb-8">
           <button 
+            type="button"
             onClick={() => setShowAddEmployee(true)} 
             className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition flex items-center gap-2"
           >
@@ -610,6 +715,7 @@ export default function OwnerDashboard() {
             Add Employee
           </button>
           <button 
+            type="button"
             onClick={() => fetchAllData()} 
             className="px-5 py-2.5 bg-gray-800 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition flex items-center gap-2"
           >
@@ -634,6 +740,7 @@ export default function OwnerDashboard() {
               </div>
               {availableTasks.length > 5 && (
                 <button
+                  type="button"
                   onClick={() => refreshDisplayedTasks()}
                   className="text-xs bg-white/80 px-3 py-1.5 rounded-lg text-gray-600 hover:text-emerald-600 hover:bg-white transition shadow-sm"
                 >
@@ -653,14 +760,25 @@ export default function OwnerDashboard() {
                   {displayedTasks.map((task) => (
                     <div 
                       key={task.id} 
-                      className="p-4 bg-white rounded-xl hover:shadow-md transition-all cursor-pointer border border-gray-200 hover:border-yellow-300 group"
-                      onClick={() => {
-                        setSelectedTask(task);
-                        setShowAssignModal(true);
-                      }}
+                      className="p-4 bg-white rounded-xl hover:shadow-md transition-all border border-gray-200 hover:border-yellow-300"
                     >
                       <div className="flex items-start justify-between">
-                        <div className="flex-1">
+                        <div 
+                          className="flex-1 cursor-pointer"
+                          onClick={() => {
+                            setSelectedTask(task);
+                            setShowAssignModal(true);
+                          }}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedTask(task);
+                              setShowAssignModal(true);
+                            }
+                          }}
+                        >
                           <p className="font-medium text-gray-800 text-sm">{task.title}</p>
                           <div className="flex items-center gap-2 mt-1.5">
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -674,9 +792,9 @@ export default function OwnerDashboard() {
                           </div>
                         </div>
                         <button 
-                          className="opacity-0 group-hover:opacity-100 transition text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium"
-                          onClick={(e) => {
-                            e.stopPropagation();
+                          type="button"
+                          className="ml-2 text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium transition"
+                          onClick={() => {
                             setSelectedTask(task);
                             setShowAssignModal(true);
                           }}
@@ -690,6 +808,7 @@ export default function OwnerDashboard() {
                   {availableTasks.length > 5 && (
                     <div className="text-center pt-3">
                       <button
+                        type="button"
                         onClick={() => refreshDisplayedTasks()}
                         className="text-xs text-gray-400 hover:text-emerald-600 transition"
                       >
@@ -744,6 +863,7 @@ export default function OwnerDashboard() {
                           </span>
                         </div>
                         <button
+                          type="button"
                           onClick={() => completeTask(task.id)}
                           className="text-green-600 hover:text-green-700 bg-green-50 hover:bg-green-100 px-3 py-1 rounded-lg text-sm font-medium transition"
                         >
@@ -836,7 +956,7 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      {/* Email Invitation Modal - Professional Email Style */}
+      {/* Email Invitation Modal */}
       {showEmailPreview && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -850,7 +970,6 @@ export default function OwnerDashboard() {
               <p className="text-gray-500 text-sm mt-1">This is what the employee will receive</p>
             </div>
 
-            {/* Professional Email Preview */}
             <div className="border border-gray-200 rounded-xl overflow-hidden mb-4">
               <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
                 <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -864,7 +983,6 @@ export default function OwnerDashboard() {
                 </div>
               </div>
               <div className="p-6 bg-white">
-                {/* Email Header */}
                 <div className="text-center mb-6">
                   <div className="inline-block h-12 w-12 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
                     <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -876,7 +994,6 @@ export default function OwnerDashboard() {
                 <h2 className="text-2xl font-bold text-center text-gray-800 mb-2">Welcome to {newEmployeeCredentials.businessName}!</h2>
                 <p className="text-gray-600 text-center mb-6">You've been invited to join the team and start collaborating.</p>
 
-                {/* Greeting */}
                 <p className="text-gray-700 mb-4">Dear <strong>{newEmployeeCredentials.name} {newEmployeeCredentials.surname}</strong>,</p>
 
                 <p className="text-gray-700 mb-4">
@@ -884,7 +1001,6 @@ export default function OwnerDashboard() {
                   the all-in-one platform for team collaboration and task management.
                 </p>
 
-                {/* Account Details Box */}
                 <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
                   <p className="text-sm font-semibold text-gray-700 mb-2">🔐 Your Account Details</p>
                   <div className="space-y-2">
@@ -896,12 +1012,14 @@ export default function OwnerDashboard() {
                       <span className="text-gray-500 w-20">Password:</span>
                       <code className="bg-white px-2 py-1 rounded border border-gray-200 text-sm font-mono">{newEmployeeCredentials.password}</code>
                       <button
+                        type="button"
                         onClick={() => {
                           navigator.clipboard.writeText(newEmployeeCredentials.password);
                           setMessage({ type: "success", text: "Password copied to clipboard!" });
                           setTimeout(() => setMessage({ type: "", text: "" }), 2000);
                         }}
                         className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded transition"
+                        aria-label="Copy password to clipboard"
                       >
                         Copy
                       </button>
@@ -909,7 +1027,6 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
 
-                {/* Login URL Box */}
                 <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
                   <div className="flex gap-2">
                     <span className="text-blue-600">🔗</span>
@@ -919,7 +1036,6 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
 
-                {/* Security Notice */}
                 <div className="bg-yellow-50 rounded-lg p-3 mb-4 border border-yellow-200">
                   <div className="flex gap-2">
                     <span className="text-yellow-600">🔒</span>
@@ -929,7 +1045,6 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
 
-                {/* What you can do section */}
                 <div className="mb-4">
                   <p className="text-gray-700 font-semibold mb-2">What you can do with GrowthGrid:</p>
                   <ul className="space-y-2 text-gray-600 text-sm">
@@ -940,10 +1055,10 @@ export default function OwnerDashboard() {
                   </ul>
                 </div>
 
-                {/* CTA Button */}
                 <div className="text-center mt-6">
                   <p className="text-gray-600 mb-3">Click the button below to log in and get started:</p>
                   <button
+                    type="button"
                     onClick={() => {
                       window.open(newEmployeeCredentials.loginUrl, "_blank");
                     }}
@@ -956,7 +1071,6 @@ export default function OwnerDashboard() {
                   </button>
                 </div>
 
-                {/* Footer */}
                 <div className="border-t border-gray-200 mt-6 pt-4">
                   <p className="text-xs text-gray-400 text-center">
                     This invitation was sent by {session?.user?.email}. If you did not expect this invitation, please ignore this email.<br />
@@ -967,6 +1081,7 @@ export default function OwnerDashboard() {
             </div>
 
             <button
+              type="button"
               onClick={() => setShowEmailPreview(false)}
               className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-2.5 rounded-lg font-semibold hover:opacity-90 transition"
             >
@@ -985,11 +1100,15 @@ export default function OwnerDashboard() {
               <strong>{selectedTask.title}</strong>
             </p>
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Select Employee</label>
+              <label htmlFor="employee-select" className="block text-sm font-medium text-gray-700 mb-2">
+                Select Employee
+              </label>
               <select
+                id="employee-select"
                 value={selectedEmployee}
                 onChange={(e) => setSelectedEmployee(e.target.value)}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
+                aria-required="true"
               >
                 <option value="">Choose an employee...</option>
                 {employees.map((emp) => (
@@ -1001,6 +1120,7 @@ export default function OwnerDashboard() {
             </div>
             <div className="flex gap-3">
               <button
+                type="button"
                 onClick={assignTask}
                 disabled={submitting}
                 className="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition disabled:opacity-50"
@@ -1008,6 +1128,7 @@ export default function OwnerDashboard() {
                 {submitting ? "Assigning..." : "Assign Task"}
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setShowAssignModal(false);
                   setSelectedTask(null);
@@ -1034,6 +1155,7 @@ export default function OwnerDashboard() {
                 value={newEmployee.name}
                 onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
+                aria-label="First Name"
               />
               <input
                 type="text"
@@ -1041,6 +1163,7 @@ export default function OwnerDashboard() {
                 value={newEmployee.surname}
                 onChange={(e) => setNewEmployee({ ...newEmployee, surname: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
+                aria-label="Last Name"
               />
               <input
                 type="email"
@@ -1048,12 +1171,22 @@ export default function OwnerDashboard() {
                 value={newEmployee.email}
                 onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
+                aria-label="Email Address"
               />
               <div className="flex gap-3 pt-4">
-                <button onClick={handleAddEmployee} disabled={submitting} className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                <button 
+                  type="button"
+                  onClick={handleAddEmployee} 
+                  disabled={submitting} 
+                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+                >
                   {submitting ? "Adding..." : "Add Employee"}
                 </button>
-                <button onClick={() => setShowAddEmployee(false)} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition">
+                <button 
+                  type="button"
+                  onClick={() => setShowAddEmployee(false)} 
+                  className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition"
+                >
                   Cancel
                 </button>
               </div>

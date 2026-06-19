@@ -1,14 +1,12 @@
+// src/app/login/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { db } from "@/db/db";
+import { type Profile } from "@/db/schema";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,12 +16,33 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
 
     try {
+      // First, check if user exists and get their role
+      const { data: profile, error: profileError } = await db
+        .from("profiles")
+        .select("id, email, password, role, password_changed, business_id")
+        .eq("email", email)
+        .single();
+
+      if (profileError || !profile) {
+        setError("Invalid email or password");
+        setLoading(false);
+        return;
+      }
+
+      // Check password (in production, use bcrypt to compare hashed passwords)
+      if (profile.password !== password) {
+        setError("Invalid email or password");
+        setLoading(false);
+        return;
+      }
+
+      // Attempt sign in with NextAuth
       const result = await signIn("credentials", {
         email,
         password,
@@ -47,32 +66,24 @@ export default function LoginPage() {
           return;
         }
 
-        // Check if employee needs to change password
-        // After successful login, check if employee needs to change password
-// After successful login, check if employee needs to change password
-const { data: profile } = await supabase
-  .from("profiles")
-  .select("password_changed, role")
-  .eq("id", session.user.id)
-  .single();
+        // Check if user needs to change password
+        const needsPasswordChange = (profile.password_changed === false || profile.password_changed === null);
+        const isEmployee = profile.role === "employee";
 
-
-const needsPasswordChange = (profile?.password_changed === false || profile?.password_changed === null);
-const isEmployee = session.user?.role === "employee";
-
-if (needsPasswordChange && isEmployee) {
-  // First login with temporary password - show change password
-  router.push("/change-password");
-} else if (session.user?.role === "owner") {
-  // Owner goes to owner dashboard
-  router.push("/owner-dashboard");
-} else {
-  // Employee with password already changed - goes directly to dashboard
-  router.push("/employee-dashboard");
-}
+        if (needsPasswordChange && isEmployee) {
+          // First login with temporary password - show change password
+          router.push("/change-password");
+        } else if (profile.role === "owner") {
+          // Owner goes to owner dashboard
+          router.push("/owner-dashboard");
+        } else {
+          // Employee with password already changed - goes directly to dashboard
+          router.push("/employee-dashboard");
+        }
       }
     } catch (err) {
-      setError("Something went wrong");
+      console.error("Login error:", err);
+      setError("Something went wrong. Please try again.");
       setLoading(false);
     }
   };
@@ -85,7 +96,10 @@ if (needsPasswordChange && isEmployee) {
       
       <div className="relative flex min-h-screen items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
         <div className="w-full max-w-md">
-          <Link href="/" className="group mb-6 inline-flex items-center gap-2 text-sm text-emerald-600 transition hover:text-emerald-700">
+          <Link 
+            href="/" 
+            className="group mb-6 inline-flex items-center gap-2 text-sm text-emerald-600 transition hover:text-emerald-700"
+          >
             <svg className="h-4 w-4 transition-transform group-hover:-translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
@@ -113,8 +127,11 @@ if (needsPasswordChange && isEmployee) {
 
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-700">Email Address</label>
+                  <label htmlFor="email" className="mb-2 block text-sm font-medium text-gray-700">
+                    Email Address
+                  </label>
                   <input
+                    id="email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -125,9 +142,12 @@ if (needsPasswordChange && isEmployee) {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-700">Password</label>
+                  <label htmlFor="password" className="mb-2 block text-sm font-medium text-gray-700">
+                    Password
+                  </label>
                   <div className="relative">
                     <input
+                      id="password"
                       type={showPassword ? "text" : "password"}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -138,7 +158,8 @@ if (needsPasswordChange && isEmployee) {
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
                     >
                       {showPassword ? "👁️" : "🔒"}
                     </button>
