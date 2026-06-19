@@ -44,12 +44,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if user already exists
+    // Check if user already exists - using maybeSingle to avoid errors
     const { data: existingUser, error: checkError } = await db
       .from("profiles")
       .select("id")
       .eq("email", email)
-      .single();
+      .maybeSingle();
 
     if (existingUser) {
       return NextResponse.json(
@@ -62,15 +62,17 @@ export async function POST(req: Request) {
     const userId = crypto.randomUUID();
     const businessId = crypto.randomUUID();
 
+    console.log("🆔 Generated IDs:", { userId, businessId });
+
     // ✅ STEP 1: Create business FIRST with snake_case column names
     const { data: businessData, error: businessError } = await db
       .from("businesses")
       .insert({
         id: businessId,
-        user_id: userId,                // ✅ Changed from userId
-        business_name: businessName,    // ✅ Changed from businessName
+        user_id: userId,
+        business_name: businessName,
         industry: industry,
-        business_size: businessSize || "Just me (Solo)", // ✅ Changed from businessSize
+        business_size: businessSize || "Just me (Solo)",
       })
       .select();
 
@@ -82,7 +84,7 @@ export async function POST(req: Request) {
       );
     }
 
-    console.log("✅ Business created successfully!");
+    console.log("✅ Business created successfully:", businessData);
 
     // ✅ STEP 2: Create profile with snake_case column names
     const { data: profileData, error: profileError } = await db
@@ -95,37 +97,46 @@ export async function POST(req: Request) {
         password: password,
         password_changed: false,
         role: "owner",
-        business_id: businessId,        // ✅ Already snake_case
+        business_id: businessId,
       })
       .select();
 
     if (profileError) {
       console.error("❌ Profile insert error:", profileError);
-      // Rollback: Delete the business if profile creation fails
-      await db.from("businesses").delete().eq("id", businessId);
-      return NextResponse.json({ error: profileError.message }, { status: 400 });
+      
+      // 🔴 FIXED: DO NOT delete the business - keep it for debugging
+      // The business will remain in the database so you can investigate
+      
+      return NextResponse.json({ 
+        error: profileError.message,
+        // Include businessId so you can manually fix or delete it later
+        businessId: businessId,
+        userId: userId
+      }, { status: 400 });
     }
 
-    console.log("✅ Profile created successfully!");
+    console.log("✅ Profile created successfully:", profileData);
 
     // ✅ STEP 3: Create employee record for the owner
-    const { error: employeeError } = await db
+    const { data: employeeData, error: employeeError } = await db
       .from("employees")
       .insert({
         id: crypto.randomUUID(),
-        business_owner_id: userId,      // ✅ Changed from businessOwnerId
-        business_id: businessId,        // ✅ Already snake_case
-        profile_id: userId,             // ✅ Changed from profileId
+        business_owner_id: userId,
+        business_id: businessId,
+        profile_id: userId,
         email: email,
         name: name,
         surname: surname,
         role: "owner",
-      });
+      })
+      .select();
 
     if (employeeError) {
       console.error("❌ Employee error:", employeeError);
+      // Don't fail registration if employee creation fails
     } else {
-      console.log("✅ Employee created successfully!");
+      console.log("✅ Employee created successfully:", employeeData);
     }
 
     // ✅ STEP 4: Create additional employees if any

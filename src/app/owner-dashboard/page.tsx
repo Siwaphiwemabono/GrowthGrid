@@ -6,8 +6,9 @@ import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { db } from "@/db/db";
+import NotificationBell from "@/app/components/notifications/NotificationBell";
 
-// Types from your schema - Updated to match snake_case column names
+// Types
 interface Business {
   id: string;
   user_id: string;
@@ -46,7 +47,6 @@ interface Task {
   assigned_to_email: string | null;
 }
 
-// Extended types for the dashboard
 interface OwnerProfile {
   id: string;
   name: string;
@@ -55,8 +55,40 @@ interface OwnerProfile {
   role: string;
 }
 
-// ✅ FIXED: DashboardTask simply extends Task - no redeclared properties
 interface DashboardTask extends Task {}
+
+interface PriorityAction {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW';
+  type: 'task' | 'employee' | 'business';
+  action: string;
+  due_date?: string;
+  task_id?: number;
+  employee_id?: string;
+}
+
+interface RevenueOpportunity {
+  id: string;
+  title: string;
+  description: string;
+  potentialRevenue: number;
+  probability: 'HIGH' | 'MEDIUM' | 'LOW';
+  source: string;
+  action: string;
+}
+
+interface RiskAlert {
+  id: string;
+  title: string;
+  description: string;
+  riskLevel: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  potentialLoss: number;
+  source: string;
+  action: string;
+  customer?: string;
+}
 
 const INDUSTRY_TASKS: Record<string, string[]> = {
   retail: [
@@ -175,6 +207,9 @@ export default function OwnerDashboard() {
   const [displayedTasks, setDisplayedTasks] = useState<Task[]>([]);
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+  const [priorityActions, setPriorityActions] = useState<PriorityAction[]>([]);
+  const [revenueOpportunities, setRevenueOpportunities] = useState<RevenueOpportunity[]>([]);
+  const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
 
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -219,6 +254,230 @@ export default function OwnerDashboard() {
     refreshDisplayedTasks();
   }, [availableTasks]);
 
+  const generatePriorityActions = (tasks: Task[], employees: Employee[]) => {
+    const actions: PriorityAction[] = [];
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    tasks
+      .filter(t => t.status !== "Completed" && t.due_date && new Date(t.due_date) < today)
+      .forEach(task => {
+        const daysOverdue = Math.floor((today.getTime() - new Date(task.due_date!).getTime()) / (1000 * 60 * 60 * 24));
+        actions.push({
+          id: `urgent-overdue-${task.id}`,
+          title: `⚠️ Task Overdue: ${task.title}`,
+          description: `Overdue by ${daysOverdue} day${daysOverdue > 1 ? 's' : ''}`,
+          priority: 'URGENT',
+          type: 'task',
+          action: `Review and complete "${task.title}"`,
+          due_date: task.due_date || undefined,
+          task_id: task.id,
+        });
+      });
+
+    tasks
+      .filter(t => t.priority === "High" && t.status === "Available")
+      .forEach(task => {
+        actions.push({
+          id: `urgent-high-${task.id}`,
+          title: `🔴 High Priority Task: ${task.title}`,
+          description: 'This task needs immediate attention',
+          priority: 'URGENT',
+          type: 'task',
+          action: `Assign and start "${task.title}"`,
+          task_id: task.id,
+        });
+      });
+
+    tasks
+      .filter(t => t.status !== "Completed" && t.due_date)
+      .forEach(task => {
+        if (!task.due_date) return;
+        const dueDate = new Date(task.due_date);
+        const daysUntil = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysUntil >= 0 && daysUntil <= 2) {
+          actions.push({
+            id: `high-approaching-${task.id}`,
+            title: `📅 Due Soon: ${task.title}`,
+            description: `Due in ${daysUntil} day${daysUntil !== 1 ? 's' : ''}`,
+            priority: 'HIGH',
+            type: 'task',
+            action: `Complete "${task.title}" by ${new Date(task.due_date).toLocaleDateString()}`,
+            due_date: task.due_date,
+            task_id: task.id,
+          });
+        }
+      });
+
+    tasks
+      .filter(t => t.status === "In Progress" && t.created_at)
+      .forEach(task => {
+        const daysInProgress = Math.floor((now.getTime() - new Date(task.created_at).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysInProgress > 3) {
+          actions.push({
+            id: `high-stuck-${task.id}`,
+            title: `⏳ Task Stalled: ${task.title}`,
+            description: `In progress for ${daysInProgress} days`,
+            priority: 'HIGH',
+            type: 'task',
+            action: `Check progress on "${task.title}"`,
+            task_id: task.id,
+          });
+        }
+      });
+
+    tasks
+      .filter(t => !t.assigned_to && t.status === "Available")
+      .slice(0, 3)
+      .forEach(task => {
+        actions.push({
+          id: `medium-unassigned-${task.id}`,
+          title: `📋 Unassigned Task: ${task.title}`,
+          description: 'Ready to be assigned',
+          priority: 'MEDIUM',
+          type: 'task',
+          action: `Assign "${task.title}" to a team member`,
+          task_id: task.id,
+        });
+      });
+
+    if (employees.length > 0) {
+      actions.push({
+        id: 'medium-team-review',
+        title: '👥 Review Team Performance',
+        description: `${employees.length} team members active`,
+        priority: 'MEDIUM',
+        type: 'employee',
+        action: 'Check employee performance in Reports',
+      });
+    }
+
+    const priorityOrder = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    actions.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+    return actions.slice(0, 6);
+  };
+
+  const generateRevenueOpportunities = (tasks: Task[]) => {
+    const opportunities: RevenueOpportunity[] = [];
+    
+    tasks
+      .filter(t => t.priority === "High" && t.status === "Available")
+      .forEach((task, index) => {
+        const potentialRevenue = (index + 1) * 2500;
+        opportunities.push({
+          id: `revenue-high-${task.id}`,
+          title: `💰 High Value Task: ${task.title}`,
+          description: `Completing this task could generate revenue`,
+          potentialRevenue: potentialRevenue,
+          probability: 'HIGH',
+          source: 'High Priority Task',
+          action: `Assign and complete "${task.title}" today`,
+        });
+      });
+
+    tasks
+      .filter(t => t.status !== "Completed" && t.due_date && new Date(t.due_date) < new Date())
+      .forEach((task, index) => {
+        const potentialRevenue = (index + 1) * 1500;
+        opportunities.push({
+          id: `revenue-overdue-${task.id}`,
+          title: `⏰ Recovery Opportunity: ${task.title}`,
+          description: `Resolving this overdue task could recover revenue`,
+          potentialRevenue: potentialRevenue,
+          probability: 'MEDIUM',
+          source: 'Overdue Task',
+          action: `Complete "${task.title}" to recover potential revenue`,
+        });
+      });
+
+    tasks
+      .filter(t => t.status === "In Progress")
+      .slice(0, 2)
+      .forEach((task, index) => {
+        const potentialRevenue = (index + 1) * 3000;
+        opportunities.push({
+          id: `revenue-progress-${task.id}`,
+          title: `📈 Revenue in Progress: ${task.title}`,
+          description: `This task is moving forward and generating value`,
+          potentialRevenue: potentialRevenue,
+          probability: 'MEDIUM',
+          source: 'In Progress',
+          action: `Follow up on "${task.title}" to ensure completion`,
+        });
+      });
+
+    opportunities.sort((a, b) => b.potentialRevenue - a.potentialRevenue);
+    return opportunities.slice(0, 3);
+  };
+
+  const generateRiskAlerts = (tasks: Task[], employees: Employee[]) => {
+    const alerts: RiskAlert[] = [];
+
+    tasks
+      .filter(t => t.status !== "Completed" && t.due_date && new Date(t.due_date) < new Date())
+      .forEach(task => {
+        const daysOverdue = Math.floor((new Date().getTime() - new Date(task.due_date!).getTime()) / (1000 * 60 * 60 * 24));
+        const potentialLoss = daysOverdue * 1000;
+        alerts.push({
+          id: `risk-overdue-${task.id}`,
+          title: `⚠️ Task Overdue: ${task.title}`,
+          description: `Overdue by ${daysOverdue} day${daysOverdue > 1 ? 's' : ''} - Action required immediately`,
+          riskLevel: 'CRITICAL',
+          potentialLoss: potentialLoss,
+          source: 'Overdue Task',
+          action: `Complete "${task.title}" immediately`,
+        });
+      });
+
+    tasks
+      .filter(t => !t.assigned_to && t.status === "Available")
+      .slice(0, 2)
+      .forEach(task => {
+        alerts.push({
+          id: `risk-unassigned-${task.id}`,
+          title: `📋 Unassigned Task: ${task.title}`,
+          description: 'No one is working on this - potential missed opportunity',
+          riskLevel: 'HIGH',
+          potentialLoss: 2000,
+          source: 'Unassigned Task',
+          action: `Assign "${task.title}" to a team member`,
+        });
+      });
+
+    tasks
+      .filter(t => t.status === "In Progress" && t.created_at)
+      .forEach(task => {
+        const daysInProgress = Math.floor((new Date().getTime() - new Date(task.created_at).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysInProgress > 5) {
+          alerts.push({
+            id: `risk-stalled-${task.id}`,
+            title: `⏳ Task Stalled: ${task.title}`,
+            description: `In progress for ${daysInProgress} days - resources being wasted`,
+            riskLevel: 'MEDIUM',
+            potentialLoss: 1500,
+            source: 'Stalled Task',
+            action: `Review "${task.title}" progress today`,
+          });
+        }
+      });
+
+    if (employees.length > 0 && tasks.length === 0) {
+      alerts.push({
+        id: 'risk-idle-team',
+        title: '👥 Team Idle',
+        description: `Your team of ${employees.length} has no active tasks`,
+        riskLevel: 'MEDIUM',
+        potentialLoss: 5000,
+        source: 'Team Idle',
+        action: 'Create and assign new tasks today',
+      });
+    }
+
+    const riskOrder = { CRITICAL: 0, HIGH: 1, MEDIUM: 2 };
+    alerts.sort((a, b) => riskOrder[a.riskLevel] - riskOrder[b.riskLevel]);
+    return alerts.slice(0, 3);
+  };
+
   const fetchAllData = async () => {
     const userId = session?.user?.id;
     if (!userId) return;
@@ -226,7 +485,6 @@ export default function OwnerDashboard() {
     setLoading(true);
 
     try {
-      // Fetch owner profile
       const { data: ownerData, error: ownerError } = await db
         .from("profiles")
         .select("*")
@@ -239,7 +497,6 @@ export default function OwnerDashboard() {
         setOwner(ownerData);
       }
 
-      // Fetch business - using snake_case
       const { data: businessData, error: businessError } = await db
         .from("businesses")
         .select("*")
@@ -253,9 +510,9 @@ export default function OwnerDashboard() {
         await ensureTaskPool(businessData.industry, userId);
       }
 
-      // Fetch tasks for this business - using snake_case
+      let tasksData: Task[] = [];
       if (businessData?.id) {
-        const { data: tasksData, error: tasksError } = await db
+        const { data, error: tasksError } = await db
           .from("tasks")
           .select("*")
           .eq("business_id", businessData.id)
@@ -263,26 +520,37 @@ export default function OwnerDashboard() {
 
         if (tasksError) {
           console.error("❌ Tasks fetch error:", tasksError);
-        } else if (tasksData) {
-          setAvailableTasks(tasksData.filter((t: Task) => t.status === "Available"));
-          setActiveTasks(tasksData.filter((t: Task) => t.status === "In Progress"));
-          setCompletedTasks(tasksData.filter((t: Task) => t.status === "Completed").slice(0, 10));
+        } else if (data) {
+          tasksData = data;
+          setAvailableTasks(data.filter((t: Task) => t.status === "Available"));
+          setActiveTasks(data.filter((t: Task) => t.status === "In Progress"));
+          setCompletedTasks(data.filter((t: Task) => t.status === "Completed").slice(0, 10));
         }
       }
 
-      // Fetch employees for this business - using snake_case
+      let employeesData: Employee[] = [];
       if (businessData?.id) {
-        const { data: employeesData, error: employeesError } = await db
+        const { data, error: employeesError } = await db
           .from("employees")
           .select("*")
           .eq("business_id", businessData.id);
 
         if (employeesError) {
           console.error("❌ Employees fetch error:", employeesError);
-        } else if (employeesData) {
+        } else if (data) {
+          employeesData = data;
           setEmployees(employeesData);
         }
       }
+
+      const actions = generatePriorityActions(tasksData, employeesData);
+      setPriorityActions(actions);
+
+      const opportunities = generateRevenueOpportunities(tasksData);
+      setRevenueOpportunities(opportunities);
+
+      const risks = generateRiskAlerts(tasksData, employeesData);
+      setRiskAlerts(risks);
 
     } catch (err) {
       console.error("❌ Fetch error:", err);
@@ -341,28 +609,49 @@ export default function OwnerDashboard() {
     setSubmitting(true);
     const employee = employees.find(e => e.id === selectedEmployee);
 
+    if (!employee) {
+      setMessage({ type: "error", text: "Selected employee not found" });
+      setSubmitting(false);
+      return;
+    }
+
     try {
+      const assignToId = employee.profile_id || employee.id;
+
       const { error: updateError } = await db
         .from("tasks")
         .update({
-          assigned_to: employee?.id,
-          assigned_to_email: employee?.email,
+          assigned_to: assignToId,
+          assigned_to_email: employee.email,
           status: "In Progress",
           due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         })
         .eq("id", selectedTask.id);
 
       if (updateError) {
+        console.error("❌ Task update error:", updateError);
         setMessage({ type: "error", text: updateError.message });
       } else {
-        setMessage({ type: "success", text: `✅ Task assigned to ${employee?.name}` });
+        await db
+          .from("notifications")
+          .insert({
+            user_id: assignToId,
+            title: "New Task Assigned 📋",
+            message: `You have been assigned: "${selectedTask.title}"`,
+            type: "task_assigned",
+            link: `/tasks/${selectedTask.id}`,
+            read: false,
+          });
+
+        setMessage({ type: "success", text: `✅ Task assigned to ${employee.name}` });
         setShowAssignModal(false);
         setSelectedTask(null);
         setSelectedEmployee("");
         fetchAllData();
       }
     } catch (err: any) {
-      setMessage({ type: "error", text: err.message });
+      console.error("❌ Assign task error:", err);
+      setMessage({ type: "error", text: err.message || "Failed to assign task" });
     }
     setSubmitting(false);
   };
@@ -389,144 +678,133 @@ export default function OwnerDashboard() {
   };
 
   const handleAddEmployee = async () => {
-  if (!newEmployee.email || !newEmployee.name || !newEmployee.surname) {
-    setMessage({ type: "error", text: "Please fill in all fields" });
-    return;
-  }
-
-  setSubmitting(true);
-  const tempPassword = Math.random().toString(36).slice(-8);
-
-  try {
-    const userId = crypto.randomUUID();
-
-    // Get the business ID
-    const { data: businessData, error: businessError } = await db
-      .from("businesses")
-      .select("id")
-      .eq("user_id", session?.user?.id)
-      .single();
-
-    if (businessError || !businessData) {
-      console.error("❌ Business fetch error:", businessError);
-      setMessage({ 
-        type: "error", 
-        text: businessError?.message || "Unable to find business. Please refresh." 
-      });
-      setSubmitting(false);
+    if (!newEmployee.email || !newEmployee.name || !newEmployee.surname) {
+      setMessage({ type: "error", text: "Please fill in all fields" });
       return;
     }
 
-    // ✅ FIXED: Check if email already exists - use .maybeSingle() instead of .single()
-    const { data: existingProfile, error: checkError } = await db
-      .from("profiles")
-      .select("email")
-      .eq("email", newEmployee.email)
-      .maybeSingle();
+    setSubmitting(true);
+    const tempPassword = Math.random().toString(36).slice(-8);
 
-    // If there's an error other than "not found", log it
-    if (checkError && checkError.code !== "PGRST116") {
-      console.error("❌ Check error:", checkError);
-    }
+    try {
+      const userId = crypto.randomUUID();
 
-    if (existingProfile) {
-      setMessage({ 
-        type: "error", 
-        text: `❌ Email "${newEmployee.email}" is already registered. Please use a different email.` 
-      });
-      setSubmitting(false);
-      return;
-    }
+      const { data: businessData, error: businessError } = await db
+        .from("businesses")
+        .select("id")
+        .eq("user_id", session?.user?.id)
+        .single();
 
-    console.log("📝 Creating employee with password:", tempPassword);
-    console.log("📝 Business ID:", businessData.id);
+      if (businessError || !businessData) {
+        console.error("❌ Business fetch error:", businessError);
+        setMessage({ 
+          type: "error", 
+          text: businessError?.message || "Unable to find business. Please refresh." 
+        });
+        setSubmitting(false);
+        return;
+      }
 
-    // Insert employee as a profile
-    const { data: insertedData, error: insertError } = await db
-      .from("profiles")
-      .insert({
-        id: userId,
-        name: newEmployee.name,
-        surname: newEmployee.surname,
+      const { data: existingProfile, error: checkError } = await db
+        .from("profiles")
+        .select("email")
+        .eq("email", newEmployee.email)
+        .maybeSingle();
+
+      if (checkError && checkError.code !== "PGRST116") {
+        console.error("❌ Check error:", checkError);
+      }
+
+      if (existingProfile) {
+        setMessage({ 
+          type: "error", 
+          text: `❌ Email "${newEmployee.email}" is already registered. Please use a different email.` 
+        });
+        setSubmitting(false);
+        return;
+      }
+
+      const { data: insertedData, error: insertError } = await db
+        .from("profiles")
+        .insert({
+          id: userId,
+          name: newEmployee.name,
+          surname: newEmployee.surname,
+          email: newEmployee.email,
+          password: tempPassword,
+          role: "employee",
+          password_changed: false,
+          business_id: businessData.id,
+        })
+        .select();
+
+      if (insertError) {
+        console.error("❌ Insert error:", insertError);
+        
+        let errorMessage = "Failed to create employee. Please try again.";
+        if (insertError.code === "23505") {
+          errorMessage = `❌ Email "${newEmployee.email}" is already registered. Please use a different email.`;
+        } else if (insertError.message) {
+          errorMessage = insertError.message;
+        }
+        
+        setMessage({ type: "error", text: errorMessage });
+        setSubmitting(false);
+        return;
+      }
+
+      const { error: empError } = await db
+        .from("employees")
+        .insert({
+          id: crypto.randomUUID(),
+          business_owner_id: session?.user?.id,
+          business_id: businessData.id,
+          profile_id: userId,
+          email: newEmployee.email,
+          name: newEmployee.name,
+          surname: newEmployee.surname,
+          role: "employee",
+        });
+
+      if (empError) {
+        console.error("❌ Employee record error:", empError);
+      }
+
+      setNewEmployeeCredentials({
         email: newEmployee.email,
         password: tempPassword,
-        role: "employee",
-        password_changed: false,
-        business_id: businessData.id,
-      })
-      .select();
-
-    if (insertError) {
-      console.error("❌ Insert error:", insertError);
-      
-      let errorMessage = "Failed to create employee. Please try again.";
-      if (insertError.code === "23505") {
-        errorMessage = `❌ Email "${newEmployee.email}" is already registered. Please use a different email.`;
-      } else if (insertError.message) {
-        errorMessage = insertError.message;
-      }
-      
-      setMessage({ type: "error", text: errorMessage });
-      setSubmitting(false);
-      return;
-    }
-
-    console.log("✅ Employee created successfully!");
-
-    // Create employee record
-    const { error: empError } = await db
-      .from("employees")
-      .insert({
-        id: crypto.randomUUID(),
-        business_owner_id: session?.user?.id,
-        business_id: businessData.id,
-        profile_id: userId,
-        email: newEmployee.email,
         name: newEmployee.name,
         surname: newEmployee.surname,
-        role: "employee",
+        loginUrl: "http://localhost:3000/login",
+        businessName: business?.business_name || "GrowthGrid"
       });
 
-    if (empError) {
-      console.error("❌ Employee record error:", empError);
+      setShowEmailPreview(true);
+      setNewEmployee({ email: "", name: "", surname: "" });
+      setShowAddEmployee(false);
+      fetchAllData();
+      
+      setMessage({ 
+        type: "success", 
+        text: `✅ Employee ${newEmployee.name} added! Temporary password: ${tempPassword}` 
+      });
+      setTimeout(() => setMessage({ type: "", text: "" }), 5000);
+      
+    } catch (err: any) {
+      console.error("❌ Error:", err);
+      setMessage({ 
+        type: "error", 
+        text: err.message || "Something went wrong. Please try again." 
+      });
     }
-
-    setNewEmployeeCredentials({
-      email: newEmployee.email,
-      password: tempPassword,
-      name: newEmployee.name,
-      surname: newEmployee.surname,
-      loginUrl: "http://localhost:3000/login",
-      businessName: business?.business_name || "GrowthGrid"
-    });
-
-    setShowEmailPreview(true);
-    setNewEmployee({ email: "", name: "", surname: "" });
-    setShowAddEmployee(false);
-    fetchAllData();
-    
-    setMessage({ 
-      type: "success", 
-      text: `✅ Employee ${newEmployee.name} added! Temporary password: ${tempPassword}` 
-    });
-    setTimeout(() => setMessage({ type: "", text: "" }), 5000);
-    
-  } catch (err: any) {
-    console.error("❌ Error:", err);
-    setMessage({ 
-      type: "error", 
-      text: err.message || "Something went wrong. Please try again." 
-    });
-  }
-  setSubmitting(false);
-};
+    setSubmitting(false);
+  };
 
   const handleLogout = async () => {
     await signOut({ redirect: false });
     router.push("/login");
   };
 
-  // Calculate stats
   const totalTasks = availableTasks.length + activeTasks.length + completedTasks.length;
   const completionRate = totalTasks > 0 ? Math.round((completedTasks.length / totalTasks) * 100) : 0;
   const productivityScore = completionRate > 50 ? "✅ Good" : "📈 Needs improvement";
@@ -542,21 +820,69 @@ export default function OwnerDashboard() {
     );
   }
 
-  // Get owner's first name
   const ownerFirstName = owner?.name || session?.user?.email?.split('@')[0] || 'Owner';
   const ownerFullName = owner ? `${owner.name} ${owner.surname}` : session?.user?.email || 'Owner';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-green-50">
       
-      {/* CSS for progress bar - inline in component */}
       <style>{`
-        .progress-bar {
-          transition: width 0.5s ease-in-out;
+        .progress-bar { transition: width 0.5s ease-in-out; }
+        .nav-link { 
+          position: relative;
+          font-weight: 500;
+          color: #4B5563;
+          transition: color 0.2s;
         }
+        .nav-link:hover { color: #059669; }
+        .nav-link.active { color: #059669; }
+        .nav-link.active::after {
+          content: '';
+          position: absolute;
+          bottom: -4px;
+          left: 0;
+          right: 0;
+          height: 2px;
+          background: #059669;
+          border-radius: 2px;
+        }
+        .card-hover {
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .card-hover:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .btn-primary {
+          background: linear-gradient(135deg, #059669, #0D9488);
+          transition: all 0.3s;
+        }
+        .btn-primary:hover {
+          transform: scale(1.02);
+          box-shadow: 0 10px 15px -3px rgba(5, 150, 105, 0.3);
+        }
+        .action-urgent { 
+          background: #FEF2F2;
+          border-left: 4px solid #EF4444;
+        }
+        .action-urgent:hover { background: #FEE2E2; }
+        .action-high { 
+          background: #FFF7ED;
+          border-left: 4px solid #F97316;
+        }
+        .action-high:hover { background: #FFEDD5; }
+        .action-medium { 
+          background: #FEFCE8;
+          border-left: 4px solid #EAB308;
+        }
+        .action-medium:hover { background: #FEF9C3; }
+        .action-low { 
+          background: #F9FAFB;
+          border-left: 4px solid #9CA3AF;
+        }
+        .action-low:hover { background: #F3F4F6; }
       `}</style>
 
-      {/* Navigation */}
       <nav className="bg-white/90 backdrop-blur-md border-b border-emerald-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -571,17 +897,23 @@ export default function OwnerDashboard() {
                 <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 rounded-full">Owner</span>
               </div>
             </div>
-            <div className="hidden md:flex items-center gap-8">
-              <Link href="/owner-dashboard" className="text-emerald-600 font-medium">Dashboard</Link>
-              <Link href="/owner/team" className="text-gray-600 hover:text-emerald-600 transition">Team</Link>
+            
+            <div className="hidden md:flex items-center gap-6">
+              <Link href="/owner-dashboard" className="nav-link active">Dashboard</Link>
+              <Link href="/owner/team" className="nav-link">Team</Link>
+              <Link href="/reports" className="nav-link">Reports</Link>
             </div>
-            <div className="flex items-center gap-4">
+
+            <div className="flex items-center gap-3">
               <div className="hidden md:flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
                   <span className="text-white text-xs font-medium">{ownerFirstName?.charAt(0).toUpperCase()}</span>
                 </div>
                 <span className="text-sm text-gray-700 font-medium">{ownerFullName}</span>
               </div>
+              
+              <NotificationBell />
+              
               <button 
                 type="button"
                 onClick={handleLogout} 
@@ -589,6 +921,7 @@ export default function OwnerDashboard() {
               >
                 Logout
               </button>
+              
               <button 
                 type="button"
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)} 
@@ -601,19 +934,27 @@ export default function OwnerDashboard() {
               </button>
             </div>
           </div>
+
+          {mobileMenuOpen && (
+            <div className="md:hidden py-4 border-t border-gray-100">
+              <div className="flex flex-col space-y-3">
+                <Link href="/owner-dashboard" className="text-emerald-600 font-medium px-3 py-2">Dashboard</Link>
+                <Link href="/owner/team" className="text-gray-600 px-3 py-2">Team</Link>
+                <Link href="/reports" className="text-gray-600 px-3 py-2">Reports</Link>
+              </div>
+            </div>
+          )}
         </div>
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* Messages */}
         {message.text && (
           <div className={`mb-6 p-4 rounded-xl ${message.type === "success" ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
             {message.text}
           </div>
         )}
 
-        {/* Welcome Section - Shows Owner Name */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-800">
             Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, {ownerFirstName} 👋
@@ -621,9 +962,212 @@ export default function OwnerDashboard() {
           <p className="text-gray-500 mt-1">Welcome back to {business?.business_name || 'GrowthGrid'} dashboard</p>
         </div>
 
+        {/* 🔴 TODAY'S PRIORITY ACTIONS */}
+        {priorityActions.length > 0 && (
+          <div className="mb-8 bg-gradient-to-r from-red-50 via-yellow-50 to-emerald-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">🎯</span> Today's Priority Actions
+                </h2>
+                <p className="text-sm text-gray-500 mt-0.5">Your most important tasks for today</p>
+              </div>
+              <span className="text-xs bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full font-medium">
+                {priorityActions.filter(a => a.priority === 'URGENT').length} urgent
+              </span>
+            </div>
+            
+            <div className="space-y-2">
+              {priorityActions.map((action) => {
+                const priorityClass = {
+                  URGENT: 'action-urgent',
+                  HIGH: 'action-high',
+                  MEDIUM: 'action-medium',
+                  LOW: 'action-low',
+                };
+                const priorityLabels = {
+                  URGENT: '🔴 URGENT',
+                  HIGH: '🟠 HIGH',
+                  MEDIUM: '🟡 MEDIUM',
+                  LOW: '⚪ LOW',
+                };
+                
+                return (
+                  <div 
+                    key={action.id} 
+                    className={`p-3 rounded-r-lg transition-all cursor-pointer ${priorityClass[action.priority]}`}
+                    onClick={() => {
+                      if (action.task_id) {
+                        const task = availableTasks.find(t => t.id === action.task_id) || 
+                                     activeTasks.find(t => t.id === action.task_id);
+                        if (task) {
+                          setSelectedTask(task);
+                          setShowAssignModal(true);
+                        }
+                      }
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-gray-600">{priorityLabels[action.priority]}</span>
+                          <h3 className="text-sm font-medium text-gray-800">{action.title}</h3>
+                        </div>
+                        <p className="text-xs text-gray-600 mt-0.5">{action.description}</p>
+                        <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                          <span>💡</span> {action.action}
+                        </p>
+                      </div>
+                      {action.task_id && (
+                        <button 
+                          className="text-xs bg-white/80 hover:bg-white text-emerald-700 px-3 py-1 rounded-lg shadow-sm transition whitespace-nowrap"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const task = availableTasks.find(t => t.id === action.task_id) || 
+                                         activeTasks.find(t => t.id === action.task_id);
+                            if (task) {
+                              setSelectedTask(task);
+                              setShowAssignModal(true);
+                            }
+                          }}
+                        >
+                          Take Action →
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 💰 REVENUE OPPORTUNITIES - ADDED */}
+        {revenueOpportunities.length > 0 && (
+          <div className="mb-8 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">💰</span> Revenue Opportunities
+                </h2>
+                <p className="text-sm text-gray-500 mt-0.5">Actions that could generate revenue today</p>
+              </div>
+              <span className="text-xs bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full font-medium">
+                Total: R{revenueOpportunities.reduce((sum, opp) => sum + opp.potentialRevenue, 0).toLocaleString()}
+              </span>
+            </div>
+            
+            <div className="space-y-2">
+              {revenueOpportunities.map((opp) => (
+                <div key={opp.id} className="bg-white/80 border border-emerald-100 rounded-lg p-4 hover:shadow-md transition">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-emerald-700">
+                          R{opp.potentialRevenue.toLocaleString()}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          opp.probability === 'HIGH' ? 'bg-green-100 text-green-700' :
+                          opp.probability === 'MEDIUM' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {opp.probability} probability
+                        </span>
+                      </div>
+                      <p className="font-medium text-gray-800 mt-1">{opp.title}</p>
+                      <p className="text-sm text-gray-500">{opp.description}</p>
+                      <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                        <span>💡</span> {opp.action}
+                      </p>
+                    </div>
+                    <button 
+                      className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition whitespace-nowrap"
+                      onClick={() => {
+                        const task = availableTasks.find(t => opp.id.includes(String(t.id)));
+                        if (task) {
+                          setSelectedTask(task);
+                          setShowAssignModal(true);
+                        }
+                      }}
+                    >
+                      Capture Revenue →
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ⚠️ RISK ALERTS - ADDED */}
+        {riskAlerts.length > 0 && (
+          <div className="mb-8 bg-gradient-to-r from-red-50 to-orange-50 rounded-2xl p-6 border border-red-200 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">⚠️</span> Risk Alerts
+                </h2>
+                <p className="text-sm text-gray-500 mt-0.5">Issues that could cost you money</p>
+              </div>
+              <span className="text-xs bg-red-100 text-red-700 px-3 py-1 rounded-full font-medium">
+                Risk: R{riskAlerts.reduce((sum, alert) => sum + alert.potentialLoss, 0).toLocaleString()}
+              </span>
+            </div>
+            
+            <div className="space-y-2">
+              {riskAlerts.map((alert) => (
+                <div key={alert.id} className={`bg-white/80 border rounded-lg p-4 hover:shadow-md transition ${
+                  alert.riskLevel === 'CRITICAL' ? 'border-red-300' :
+                  alert.riskLevel === 'HIGH' ? 'border-orange-300' :
+                  'border-yellow-300'
+                }`}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          alert.riskLevel === 'CRITICAL' ? 'bg-red-100 text-red-700' :
+                          alert.riskLevel === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+                          'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {alert.riskLevel}
+                        </span>
+                        <span className="text-sm font-bold text-red-600">
+                          -R{alert.potentialLoss.toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="font-medium text-gray-800 mt-1">{alert.title}</p>
+                      <p className="text-sm text-gray-500">{alert.description}</p>
+                      <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                        <span>⚡</span> {alert.action}
+                      </p>
+                    </div>
+                    <button 
+                      className={`text-xs px-4 py-2 rounded-lg transition whitespace-nowrap ${
+                        alert.riskLevel === 'CRITICAL' 
+                          ? 'bg-red-600 hover:bg-red-700 text-white' 
+                          : 'bg-orange-600 hover:bg-orange-700 text-white'
+                      }`}
+                      onClick={() => {
+                        const task = availableTasks.find(t => alert.id.includes(String(t.id))) || 
+                                     activeTasks.find(t => alert.id.includes(String(t.id)));
+                        if (task) {
+                          setSelectedTask(task);
+                          setShowAssignModal(true);
+                        }
+                      }}
+                    >
+                      Fix Now →
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100">
+          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100 card-hover">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-500 font-medium">Total Tasks</p>
@@ -637,14 +1181,11 @@ export default function OwnerDashboard() {
               </div>
             </div>
             <div className="mt-3 h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-emerald-500 rounded-full progress-bar"
-                style={{ width: `${completionRate}%` }}
-              ></div>
+              <div className="h-full bg-emerald-500 rounded-full progress-bar" style={{ width: `${completionRate}%` }}></div>
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100">
+          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100 card-hover">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-500 font-medium">Team Members</p>
@@ -671,7 +1212,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100">
+          <div className="bg-white rounded-2xl shadow-sm p-6 border border-emerald-100 card-hover">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-500 font-medium">Completion Rate</p>
@@ -686,7 +1227,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-emerald-600 to-teal-600 rounded-2xl shadow-lg p-6 text-white">
+          <div className="bg-gradient-to-br from-emerald-600 to-teal-600 rounded-2xl shadow-lg p-6 text-white card-hover">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-emerald-100 font-medium">Available Tasks</p>
@@ -703,21 +1244,39 @@ export default function OwnerDashboard() {
         </div>
 
         {/* Quick Actions */}
-        <div className="flex flex-wrap gap-4 mb-8">
+        <div className="flex flex-wrap gap-3 mb-8">
           <button 
             type="button"
             onClick={() => setShowAddEmployee(true)} 
-            className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition flex items-center gap-2"
+            className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-medium shadow-sm hover:shadow-md transition flex items-center gap-2 btn-primary"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
             </svg>
             Add Employee
           </button>
+          <Link 
+            href="/owner/team"
+            className="px-5 py-2.5 bg-purple-600 text-white rounded-xl font-medium shadow-sm hover:shadow-md transition flex items-center gap-2"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+            Manage Team
+          </Link>
+          <Link 
+            href="/reports"
+            className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-medium shadow-sm hover:shadow-md transition flex items-center gap-2"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            View Reports
+          </Link>
           <button 
             type="button"
             onClick={() => fetchAllData()} 
-            className="px-5 py-2.5 bg-gray-800 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition flex items-center gap-2"
+            className="px-5 py-2.5 bg-gray-700 text-white rounded-xl font-medium shadow-sm hover:shadow-md transition flex items-center gap-2"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -728,9 +1287,7 @@ export default function OwnerDashboard() {
 
         {/* Task Board */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Available Tasks */}
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-emerald-100 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-yellow-50 to-yellow-100/50 border-b border-yellow-200 flex justify-between items-center">
               <div>
                 <h2 className="font-semibold text-gray-800 text-lg flex items-center gap-2">
@@ -758,60 +1315,26 @@ export default function OwnerDashboard() {
               ) : (
                 <div className="space-y-3">
                   {displayedTasks.map((task) => (
-                    <div 
-                      key={task.id} 
-                      className="p-4 bg-white rounded-xl hover:shadow-md transition-all border border-gray-200 hover:border-yellow-300"
-                    >
+                    <div key={task.id} className="p-4 bg-white rounded-xl hover:shadow-md transition-all border border-gray-200 hover:border-yellow-300">
                       <div className="flex items-start justify-between">
-                        <div 
-                          className="flex-1 cursor-pointer"
-                          onClick={() => {
-                            setSelectedTask(task);
-                            setShowAssignModal(true);
-                          }}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              setSelectedTask(task);
-                              setShowAssignModal(true);
-                            }
-                          }}
-                        >
+                        <div className="flex-1 cursor-pointer" onClick={() => { setSelectedTask(task); setShowAssignModal(true); }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedTask(task); setShowAssignModal(true); } }}>
                           <p className="font-medium text-gray-800 text-sm">{task.title}</p>
                           <div className="flex items-center gap-2 mt-1.5">
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                              task.priority === "High" ? "bg-red-100 text-red-700" :
-                              task.priority === "Medium" ? "bg-yellow-100 text-yellow-700" :
-                              "bg-gray-100 text-gray-700"
-                            }`}>
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${task.priority === "High" ? "bg-red-100 text-red-700" : task.priority === "Medium" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-700"}`}>
                               {task.priority}
                             </span>
                             <span className="text-xs text-gray-400">ID: #{task.id}</span>
                           </div>
                         </div>
-                        <button 
-                          type="button"
-                          className="ml-2 text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium transition"
-                          onClick={() => {
-                            setSelectedTask(task);
-                            setShowAssignModal(true);
-                          }}
-                        >
+                        <button type="button" className="ml-2 text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium transition" onClick={() => { setSelectedTask(task); setShowAssignModal(true); }}>
                           Assign →
                         </button>
                       </div>
                     </div>
                   ))}
-                  
                   {availableTasks.length > 5 && (
                     <div className="text-center pt-3">
-                      <button
-                        type="button"
-                        onClick={() => refreshDisplayedTasks()}
-                        className="text-xs text-gray-400 hover:text-emerald-600 transition"
-                      >
+                      <button type="button" onClick={() => refreshDisplayedTasks()} className="text-xs text-gray-400 hover:text-emerald-600 transition">
                         Show {Math.min(5, availableTasks.length)} of {availableTasks.length} tasks
                       </button>
                     </div>
@@ -821,8 +1344,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
-          {/* Active Tasks */}
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-emerald-100 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-blue-50 to-blue-100/50 border-b border-blue-200">
               <div className="flex justify-between items-center">
                 <div>
@@ -854,19 +1376,11 @@ export default function OwnerDashboard() {
                             {task.assigned_to?.charAt(0) || '?'}
                           </div>
                           <span className="text-xs text-gray-600">{task.assigned_to}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            task.priority === "High" ? "bg-red-100 text-red-700" :
-                            task.priority === "Medium" ? "bg-yellow-100 text-yellow-700" :
-                            "bg-gray-100 text-gray-700"
-                          }`}>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${task.priority === "High" ? "bg-red-100 text-red-700" : task.priority === "Medium" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-700"}`}>
                             {task.priority}
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => completeTask(task.id)}
-                          className="text-green-600 hover:text-green-700 bg-green-50 hover:bg-green-100 px-3 py-1 rounded-lg text-sm font-medium transition"
-                        >
+                        <button type="button" onClick={() => completeTask(task.id)} className="text-green-600 hover:text-green-700 bg-green-50 hover:bg-green-100 px-3 py-1 rounded-lg text-sm font-medium transition">
                           ✓ Done
                         </button>
                       </div>
@@ -877,8 +1391,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
-          {/* Completed Tasks */}
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-emerald-100 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-green-50 to-green-100/50 border-b border-green-200">
               <div className="flex justify-between items-center">
                 <div>
@@ -887,9 +1400,7 @@ export default function OwnerDashboard() {
                   </h2>
                   <p className="text-sm text-gray-500">{completedTasks.length} tasks done</p>
                 </div>
-                <div className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded-full">
-                  ✅ Done
-                </div>
+                <div className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded-full">✅ Done</div>
               </div>
             </div>
             <div className="p-4 max-h-[500px] overflow-y-auto">
@@ -923,8 +1434,7 @@ export default function OwnerDashboard() {
           </div>
         </div>
 
-        {/* Team Members */}
-        <div className="mt-8 bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-emerald-100 overflow-hidden">
+        <div className="mt-8 bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
             <div className="flex items-center gap-3">
               <h2 className="font-semibold text-gray-800">👥 Team Members</h2>
@@ -956,9 +1466,9 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      {/* Email Invitation Modal */}
+      {/* Modals */}
       {showEmailPreview && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="text-center mb-4">
               <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-100">
@@ -969,7 +1479,6 @@ export default function OwnerDashboard() {
               <h2 className="text-xl font-bold text-gray-800">Invitation Email Preview</h2>
               <p className="text-gray-500 text-sm mt-1">This is what the employee will receive</p>
             </div>
-
             <div className="border border-gray-200 rounded-xl overflow-hidden mb-4">
               <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
                 <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -990,17 +1499,13 @@ export default function OwnerDashboard() {
                     </svg>
                   </div>
                 </div>
-
                 <h2 className="text-2xl font-bold text-center text-gray-800 mb-2">Welcome to {newEmployeeCredentials.businessName}!</h2>
                 <p className="text-gray-600 text-center mb-6">You've been invited to join the team and start collaborating.</p>
-
                 <p className="text-gray-700 mb-4">Dear <strong>{newEmployeeCredentials.name} {newEmployeeCredentials.surname}</strong>,</p>
-
                 <p className="text-gray-700 mb-4">
                   <strong>{session?.user?.email}</strong> has invited you to join <strong>{newEmployeeCredentials.businessName}</strong> on <strong>GrowthGrid</strong>, 
                   the all-in-one platform for team collaboration and task management.
                 </p>
-
                 <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
                   <p className="text-sm font-semibold text-gray-700 mb-2">🔐 Your Account Details</p>
                   <div className="space-y-2">
@@ -1011,40 +1516,22 @@ export default function OwnerDashboard() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500 w-20">Password:</span>
                       <code className="bg-white px-2 py-1 rounded border border-gray-200 text-sm font-mono">{newEmployeeCredentials.password}</code>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(newEmployeeCredentials.password);
-                          setMessage({ type: "success", text: "Password copied to clipboard!" });
-                          setTimeout(() => setMessage({ type: "", text: "" }), 2000);
-                        }}
-                        className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded transition"
-                        aria-label="Copy password to clipboard"
-                      >
-                        Copy
-                      </button>
+                      <button type="button" onClick={() => { navigator.clipboard.writeText(newEmployeeCredentials.password); setMessage({ type: "success", text: "Password copied to clipboard!" }); setTimeout(() => setMessage({ type: "", text: "" }), 2000); }} className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded transition" aria-label="Copy password to clipboard">Copy</button>
                     </div>
                   </div>
                 </div>
-
                 <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
                   <div className="flex gap-2">
                     <span className="text-blue-600">🔗</span>
-                    <p className="text-sm text-blue-700">
-                      <strong>Login URL:</strong> <span className="font-mono">http://localhost:3000/login</span>
-                    </p>
+                    <p className="text-sm text-blue-700"><strong>Login URL:</strong> <span className="font-mono">http://localhost:3000/login</span></p>
                   </div>
                 </div>
-
                 <div className="bg-yellow-50 rounded-lg p-3 mb-4 border border-yellow-200">
                   <div className="flex gap-2">
                     <span className="text-yellow-600">🔒</span>
-                    <p className="text-sm text-yellow-700">
-                      <strong>Security Notice:</strong> For your account security, you will be required to <strong>change your password</strong> upon first login.
-                    </p>
+                    <p className="text-sm text-yellow-700"><strong>Security Notice:</strong> For your account security, you will be required to <strong>change your password</strong> upon first login.</p>
                   </div>
                 </div>
-
                 <div className="mb-4">
                   <p className="text-gray-700 font-semibold mb-2">What you can do with GrowthGrid:</p>
                   <ul className="space-y-2 text-gray-600 text-sm">
@@ -1054,23 +1541,15 @@ export default function OwnerDashboard() {
                     <li className="flex items-center gap-2">✅ Receive real-time updates and notifications</li>
                   </ul>
                 </div>
-
                 <div className="text-center mt-6">
                   <p className="text-gray-600 mb-3">Click the button below to log in and get started:</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.open(newEmployeeCredentials.loginUrl, "_blank");
-                    }}
-                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg font-medium hover:opacity-90 transition shadow-md"
-                  >
+                  <button type="button" onClick={() => { window.open(newEmployeeCredentials.loginUrl, "_blank"); }} className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg font-medium hover:opacity-90 transition shadow-md">
                     Go to Login Page
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>
                   </button>
                 </div>
-
                 <div className="border-t border-gray-200 mt-6 pt-4">
                   <p className="text-xs text-gray-400 text-center">
                     This invitation was sent by {session?.user?.email}. If you did not expect this invitation, please ignore this email.<br />
@@ -1079,116 +1558,42 @@ export default function OwnerDashboard() {
                 </div>
               </div>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setShowEmailPreview(false)}
-              className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-2.5 rounded-lg font-semibold hover:opacity-90 transition"
-            >
-              Done
-            </button>
+            <button type="button" onClick={() => setShowEmailPreview(false)} className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-2.5 rounded-lg font-semibold hover:opacity-90 transition">Done</button>
           </div>
         </div>
       )}
 
-      {/* Assign Task Modal */}
       {showAssignModal && selectedTask && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <h2 className="text-xl font-bold mb-2">Assign Task</h2>
-            <p className="text-gray-600 mb-4">
-              <strong>{selectedTask.title}</strong>
-            </p>
+            <p className="text-gray-600 mb-4"><strong>{selectedTask.title}</strong></p>
             <div className="mb-4">
-              <label htmlFor="employee-select" className="block text-sm font-medium text-gray-700 mb-2">
-                Select Employee
-              </label>
-              <select
-                id="employee-select"
-                value={selectedEmployee}
-                onChange={(e) => setSelectedEmployee(e.target.value)}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                aria-required="true"
-              >
+              <label htmlFor="employee-select" className="block text-sm font-medium text-gray-700 mb-2">Select Employee</label>
+              <select id="employee-select" value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" aria-required="true">
                 <option value="">Choose an employee...</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name} {emp.surname} ({emp.email})
-                  </option>
-                ))}
+                {employees.map((emp) => (<option key={emp.id} value={emp.id}>{emp.name} {emp.surname} ({emp.email})</option>))}
               </select>
             </div>
             <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={assignTask}
-                disabled={submitting}
-                className="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition disabled:opacity-50"
-              >
-                {submitting ? "Assigning..." : "Assign Task"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAssignModal(false);
-                  setSelectedTask(null);
-                  setSelectedEmployee("");
-                }}
-                className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition"
-              >
-                Cancel
-              </button>
+              <button type="button" onClick={assignTask} disabled={submitting} className="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition disabled:opacity-50">{submitting ? "Assigning..." : "Assign Task"}</button>
+              <button type="button" onClick={() => { setShowAssignModal(false); setSelectedTask(null); setSelectedEmployee(""); }} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition">Cancel</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Add Employee Modal */}
       {showAddEmployee && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <h2 className="text-xl font-bold mb-4">Add Employee</h2>
             <div className="space-y-4">
-              <input
-                type="text"
-                placeholder="First Name"
-                value={newEmployee.name}
-                onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                aria-label="First Name"
-              />
-              <input
-                type="text"
-                placeholder="Last Name"
-                value={newEmployee.surname}
-                onChange={(e) => setNewEmployee({ ...newEmployee, surname: e.target.value })}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                aria-label="Last Name"
-              />
-              <input
-                type="email"
-                placeholder="Email"
-                value={newEmployee.email}
-                onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                aria-label="Email Address"
-              />
+              <input type="text" placeholder="First Name" value={newEmployee.name} onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })} className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" aria-label="First Name" />
+              <input type="text" placeholder="Last Name" value={newEmployee.surname} onChange={(e) => setNewEmployee({ ...newEmployee, surname: e.target.value })} className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" aria-label="Last Name" />
+              <input type="email" placeholder="Email" value={newEmployee.email} onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })} className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" aria-label="Email Address" />
               <div className="flex gap-3 pt-4">
-                <button 
-                  type="button"
-                  onClick={handleAddEmployee} 
-                  disabled={submitting} 
-                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-                >
-                  {submitting ? "Adding..." : "Add Employee"}
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => setShowAddEmployee(false)} 
-                  className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition"
-                >
-                  Cancel
-                </button>
+                <button type="button" onClick={handleAddEmployee} disabled={submitting} className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">{submitting ? "Adding..." : "Add Employee"}</button>
+                <button type="button" onClick={() => setShowAddEmployee(false)} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition">Cancel</button>
               </div>
             </div>
           </div>

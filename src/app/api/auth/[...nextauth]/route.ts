@@ -22,12 +22,11 @@ export const authOptions: NextAuthOptions = {
         console.log("🔍 Login attempt for:", credentials.email);
 
         try {
-          // Query profiles table directly using db
           const { data: profile, error } = await db
             .from("profiles")
             .select("*")
             .eq("email", credentials.email)
-            .single();
+            .maybeSingle();
 
           if (error) {
             console.log("❌ Database error:", error.message);
@@ -39,10 +38,6 @@ export const authOptions: NextAuthOptions = {
             return null;
           }
 
-          console.log("✅ User found:", profile.email);
-          console.log("👤 Role:", profile.role);
-
-          // Check if password matches (plain text comparison)
           if (!profile.password) {
             console.log("❌ No password stored for user");
             return null;
@@ -52,9 +47,6 @@ export const authOptions: NextAuthOptions = {
             console.log("❌ Password mismatch!");
             return null;
           }
-
-          console.log("✅ Password verified successfully!");
-          console.log("✅ Login successful for:", credentials.email);
 
           return {
             id: profile.id,
@@ -94,6 +86,7 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: "/login",
+    error: "/login",
   },
   secret: process.env.NEXTAUTH_SECRET,
 };
