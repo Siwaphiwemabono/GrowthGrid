@@ -3,27 +3,23 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { db } from "@/db/db";
-import type { Notification } from "@/types/notifications";
-import {
-  getNotifications,
-  getUnreadCount,
-  markAsRead,
-  markAllAsRead,
-} from "@/lib/notifications";
+import type { Notification } from "@/db/schema";
 
 export default function NotificationBell() {
   const { data: session } = useSession();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (session?.user?.id) {
-      loadNotifications();
+      fetchNotifications();
+      
+      // Poll for new notifications every 30 seconds
+      const interval = setInterval(fetchNotifications, 30000);
+      return () => clearInterval(interval);
     }
   }, [session]);
 
@@ -33,57 +29,57 @@ export default function NotificationBell() {
         setIsOpen(false);
       }
     };
-
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const loadNotifications = async () => {
+  const fetchNotifications = async () => {
     if (!session?.user?.id) return;
-    setLoading(true);
-    try {
-      const [notifs, count] = await Promise.all([
-        getNotifications(session.user.id),
-        getUnreadCount(session.user.id),
-      ]);
-      setNotifications(notifs);
-      setUnreadCount(count);
-    } catch (error) {
-      console.error("Error loading notifications:", error);
+    
+    const { data, error } = await db
+      .from("notifications")
+      .select("*")
+      .eq("user_id", session.user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (!error && data) {
+      setNotifications(data);
+      setUnreadCount(data.filter(n => !n.read).length);
     }
-    setLoading(false);
   };
 
-  const handleMarkAsRead = async (id: string) => {
-    await markAsRead(id);
+  const markAsRead = async (id: string) => {
+    await db
+      .from("notifications")
+      .update({ read: true })
+      .eq("id", id);
+    
     setNotifications(notifications.map(n =>
       n.id === id ? { ...n, read: true } : n
     ));
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
-  const handleMarkAllAsRead = async () => {
+  const markAllAsRead = async () => {
     if (!session?.user?.id) return;
-    await markAllAsRead(session.user.id);
+    
+    await db
+      .from("notifications")
+      .update({ read: true })
+      .eq("user_id", session.user.id)
+      .eq("read", false);
+    
     setNotifications(notifications.map(n => ({ ...n, read: true })));
     setUnreadCount(0);
   };
 
   const getNotificationIcon = (type: string) => {
-    switch (type) {
+    switch(type) {
       case 'task_assigned': return '📋';
       case 'task_completed': return '✅';
       case 'task_overdue': return '⚠️';
       default: return '📢';
-    }
-  };
-
-  const getNotificationColor = (type: string) => {
-    switch (type) {
-      case 'task_assigned': return 'bg-blue-50 border-blue-200';
-      case 'task_completed': return 'bg-green-50 border-green-200';
-      case 'task_overdue': return 'bg-red-50 border-red-200';
-      default: return 'bg-gray-50 border-gray-200';
     }
   };
 
@@ -113,7 +109,7 @@ export default function NotificationBell() {
             <div className="flex gap-2">
               {unreadCount > 0 && (
                 <button
-                  onClick={handleMarkAllAsRead}
+                  onClick={markAllAsRead}
                   className="text-xs text-emerald-600 hover:text-emerald-700 font-medium"
                 >
                   Mark all read
@@ -129,11 +125,7 @@ export default function NotificationBell() {
           </div>
 
           <div className="overflow-y-auto flex-1">
-            {loading ? (
-              <div className="p-4 text-center text-gray-500">
-                <div className="animate-spin inline-block h-5 w-5 border-2 border-emerald-500 border-t-transparent rounded-full"></div>
-              </div>
-            ) : notifications.length === 0 ? (
+            {notifications.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
                 <p className="text-2xl mb-2">🔔</p>
                 <p>No notifications</p>
@@ -146,7 +138,7 @@ export default function NotificationBell() {
                   className={`p-4 border-b border-gray-100 hover:bg-gray-50 transition cursor-pointer ${
                     !notification.read ? 'bg-emerald-50' : ''
                   }`}
-                  onClick={() => handleMarkAsRead(notification.id)}
+                  onClick={() => markAsRead(notification.id)}
                 >
                   <div className="flex gap-3">
                     <div className="text-xl">{getNotificationIcon(notification.type)}</div>
@@ -157,16 +149,14 @@ export default function NotificationBell() {
                       <p className="text-sm text-gray-600 truncate">
                         {notification.message}
                       </p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <p className="text-xs text-gray-400">
-                          {new Date(notification.created_at).toLocaleDateString()} at{' '}
-                          {new Date(notification.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                        {!notification.read && (
-                          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                        )}
-                      </div>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {new Date(notification.created_at).toLocaleDateString()} at{' '}
+                        {new Date(notification.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
                     </div>
+                    {!notification.read && (
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0 mt-2"></div>
+                    )}
                   </div>
                 </div>
               ))

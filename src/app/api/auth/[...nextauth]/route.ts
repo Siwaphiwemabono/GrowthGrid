@@ -14,14 +14,24 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
+        // Log the attempt
+        console.log("🔍 [AUTH] Login attempt for:", credentials?.email);
+
         if (!credentials?.email || !credentials?.password) {
-          console.log("❌ No credentials provided");
+          console.log("❌ [AUTH] No credentials provided");
           return null;
         }
 
-        console.log("🔍 Login attempt for:", credentials.email);
-
         try {
+          // Check if db is available
+          if (!db) {
+            console.error("❌ [AUTH] Database client is not available");
+            return null;
+          }
+
+          console.log("🔍 [AUTH] Querying profiles for:", credentials.email);
+
+          // Find user in profiles table
           const { data: profile, error } = await db
             .from("profiles")
             .select("*")
@@ -29,33 +39,47 @@ export const authOptions: NextAuthOptions = {
             .maybeSingle();
 
           if (error) {
-            console.log("❌ Database error:", error.message);
+            console.error("❌ [AUTH] Database error:", error);
             return null;
           }
 
           if (!profile) {
-            console.log("❌ User not found in profiles:", credentials.email);
+            console.log("❌ [AUTH] User not found:", credentials.email);
             return null;
           }
 
+          console.log("✅ [AUTH] User found:", {
+            id: profile.id,
+            email: profile.email,
+            role: profile.role,
+            hasPassword: !!profile.password,
+            passwordLength: profile.password?.length || 0
+          });
+
+          // Check if password exists
           if (!profile.password) {
-            console.log("❌ No password stored for user");
+            console.log("❌ [AUTH] No password stored for user");
             return null;
           }
 
+          // Check password
+          console.log("🔑 [AUTH] Comparing passwords...");
           if (profile.password !== credentials.password) {
-            console.log("❌ Password mismatch!");
+            console.log("❌ [AUTH] Password mismatch");
             return null;
           }
 
+          console.log("✅ [AUTH] Password matched for:", credentials.email);
+
+          // Return user object
           return {
             id: profile.id,
-            name: `${profile.name} ${profile.surname}`,
+            name: `${profile.name || ''} ${profile.surname || ''}`.trim() || profile.email,
             email: profile.email,
             role: profile.role || "employee",
           };
         } catch (err) {
-          console.error("❌ Auth error:", err);
+          console.error("❌ [AUTH] Error:", err);
           return null;
         }
       },
@@ -63,6 +87,7 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60,
   },
   callbacks: {
     async jwt({ token, user }) {
@@ -89,6 +114,7 @@ export const authOptions: NextAuthOptions = {
     error: "/login",
   },
   secret: process.env.NEXTAUTH_SECRET,
+  debug: true, // Enable debug mode
 };
 
 const handler = NextAuth(authOptions);

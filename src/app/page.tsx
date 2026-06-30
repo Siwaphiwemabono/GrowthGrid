@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 
 export default function Home() {
@@ -34,23 +33,27 @@ export default function Home() {
             
             {/* Desktop menu */}
             <div className="hidden md:flex md:items-center md:gap-8">
-              <Link href="#features" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">Features</Link>
+              <Link href="#problem" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">The Problem</Link>
               <Link href="#how-it-works" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">How It Works</Link>
-              <Link href="#pricing" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">Pricing</Link>
-              <Link href="#contact" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">Contact</Link>
+              <Link href="#features" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">Features</Link>
+              <Link href="#faq" className="text-sm text-gray-600 transition hover:text-emerald-600 dark:text-gray-300 dark:hover:text-emerald-400">FAQ</Link>
             </div>
             
             <div className="hidden md:flex md:items-center md:gap-4">
               <Link href="/login" className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">
                 Log in
               </Link>
-              <Link href="/register" className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:scale-105 hover:shadow-lg">
-                Start Free Trial
+              <Link href="/signup" className="rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-medium text-white transition hover:scale-105 hover:shadow-lg">
+                🚀 Start Free Trial
               </Link>
             </div>
             
             {/* Mobile menu button */}
-            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800 md:hidden">
+            <button 
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)} 
+              className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800 md:hidden"
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            >
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 {mobileMenuOpen ? (
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -65,10 +68,10 @@ export default function Home() {
           {mobileMenuOpen && (
             <div className="border-t border-emerald-100 py-4 dark:border-emerald-900/30 md:hidden">
               <div className="flex flex-col space-y-3">
-                <Link href="#features" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">Features</Link>
+                <Link href="#problem" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">The Problem</Link>
                 <Link href="#how-it-works" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">How It Works</Link>
-                <Link href="#pricing" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">Pricing</Link>
-                <Link href="#contact" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">Contact</Link>
+                <Link href="#features" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">Features</Link>
+                <Link href="#faq" className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">FAQ</Link>
                 <div className="flex gap-3 pt-2">
                   <Link href="/login" className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-center text-sm font-medium text-gray-700 dark:border-gray-700 dark:text-gray-300">Log in</Link>
                   <Link href="/register" className="flex-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-center text-sm font-medium text-white">Sign Up</Link>
@@ -82,7 +85,7 @@ export default function Home() {
       <div className="relative flex flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
         <main className="flex w-full max-w-6xl flex-col items-center">
           
-          {/* HERO SECTION - More outcome-focused */}
+          {/* HERO SECTION */}
           <div className="flex w-full flex-col items-center gap-4 text-center">
             <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
               <span className="relative flex h-2 w-2">
@@ -101,11 +104,14 @@ export default function Home() {
             <div className="mt-2 h-1 w-24 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500"></div>
             
             <p className="max-w-3xl text-lg text-gray-600 dark:text-gray-300 sm:text-xl md:text-2xl">
-              GrowthGrid turns your business data into a daily action plan that helps you recover revenue, keep customers, and close more sales.
+              GrowthGrid turns your business data into a daily action plan that helps you{' '}
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">recover revenue</span>,{' '}
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">keep customers</span>, and{' '}
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">close more sales</span>.
             </p>
           </div>
 
-          {/* TODAY'S ACTIONS MOCKUP - Moved higher (right after hero) */}
+          {/* TODAY'S ACTIONS MOCKUP */}
           <div className="mt-16 w-full max-w-2xl">
             <div className="rounded-2xl bg-white shadow-2xl dark:bg-gray-800 overflow-hidden border border-emerald-100 dark:border-emerald-900 transform transition-all duration-300 hover:scale-105">
               <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
@@ -153,7 +159,33 @@ export default function Home() {
             </p>
           </div>
 
-          {/* REAL BUSINESS SCENARIO - New section showing transformation */}
+          {/* THE PROBLEM SECTION - Added */}
+          <div className="mt-16 w-full max-w-3xl text-center" id="problem">
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-white sm:text-3xl">
+              The Real Problem: Information Overload
+            </h2>
+            <p className="mt-4 text-gray-600 dark:text-gray-400">
+              Most business owners juggle 5+ tools and spend 2+ hours a day{' '}
+              figuring out what to do. That's 60 hours a month wasted on thinking,{' '}
+              not doing.
+            </p>
+            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80">
+                <div className="text-2xl font-bold text-red-600">5+</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Tools to manage</div>
+              </div>
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80">
+                <div className="text-2xl font-bold text-yellow-600">2hrs</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Wasted daily</div>
+              </div>
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80">
+                <div className="text-2xl font-bold text-green-600">R10k+</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Lost monthly</div>
+              </div>
+            </div>
+          </div>
+
+          {/* REAL BUSINESS SCENARIO */}
           <div className="mt-16 w-full max-w-4xl">
             <div className="rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 p-8 dark:from-emerald-950/30 dark:to-teal-950/30">
               <h3 className="mb-6 text-center text-2xl font-bold text-gray-800 dark:text-white">See the Difference in 24 Hours</h3>
@@ -196,8 +228,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* PROBLEM SECTION - Moved after actions card */}
-          <div className="mt-16 w-full" id="features">
+          {/* FEATURES SECTION */}
+          <div className="mt-16 w-full" id="how-it-works">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold text-gray-800 dark:text-white sm:text-3xl">
                 Most Business Owners Open 5 Different Tools
@@ -220,23 +252,23 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Feature highlights */}
-          <div className="mt-12 grid w-full grid-cols-1 gap-5 sm:grid-cols-3 sm:gap-7" id="how-it-works">
+          {/* FEATURE HIGHLIGHTS */}
+          <div className="mt-12 grid w-full grid-cols-1 gap-5 sm:grid-cols-3 sm:gap-7" id="features">
             {[
               { 
                 icon: "🎯", 
-                title: "Never Lose a Lead", 
-                desc: "Automatically identify customers who are likely to disappear before you lose the sale",
+                title: "Lead Churn Prevention", 
+                desc: "Automatically identify leads that haven't been contacted in 7+ days and prioritize them before they go cold",
               },
               { 
                 icon: "📋", 
-                title: "Know What To Do Next", 
-                desc: "Get a prioritized action list every morning based on your actual business data",
+                title: "Daily Action Priority List", 
+                desc: "Get a ranked list of actions every morning based on urgency, revenue potential, and customer risk",
               },
               { 
                 icon: "💵", 
-                title: "Recover Lost Revenue", 
-                desc: "Track unpaid invoices and forgotten opportunities automatically",
+                title: "Revenue Recovery System", 
+                desc: "Track unpaid invoices, forgotten follow-ups, and missed opportunities automatically",
               },
             ].map((feature, idx) => (
               <div
@@ -253,7 +285,7 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Value propositions - What you get daily */}
+          {/* VALUE PROPOSITIONS */}
           <div className="mt-16 grid w-full grid-cols-1 gap-4 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 p-6 dark:from-emerald-950/30 dark:to-teal-950/30 sm:grid-cols-4 sm:gap-6">
             {[
               { icon: "⚡", label: "Prioritized Daily Actions", desc: "Know exactly what to do" },
@@ -269,7 +301,7 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Data → Decisions → Actions Flow */}
+          {/* DATA → DECISIONS → ACTIONS FLOW */}
           <div className="mt-16 w-full rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 p-8 text-center text-white">
             <h3 className="text-2xl font-bold">From Data to Decisions to Actions</h3>
             <div className="mt-6 flex flex-col items-center justify-center gap-4 sm:flex-row sm:gap-8">
@@ -293,36 +325,58 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Judge/Investor Sentence */}
+          {/* FAQ SECTION - Added */}
+          <div className="mt-16 w-full max-w-3xl" id="faq">
+            <h2 className="text-center text-2xl font-bold text-gray-800 dark:text-white">
+              Questions? We've Got Answers.
+            </h2>
+            <div className="mt-6 space-y-4">
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80 border border-emerald-100 dark:border-emerald-900/30">
+                <h4 className="font-semibold text-gray-800 dark:text-white">How is this different from a CRM?</h4>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">A CRM shows you data. GrowthGrid tells you what to do with it. We don't store more data - we prioritize your actions so you know exactly what to do next.</p>
+              </div>
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80 border border-emerald-100 dark:border-emerald-900/30">
+                <h4 className="font-semibold text-gray-800 dark:text-white">Do I need to integrate my existing tools?</h4>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">You can start with manual data entry, or integrate with your existing tools for automatic data syncing. We make it easy to get started either way.</p>
+              </div>
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80 border border-emerald-100 dark:border-emerald-900/30">
+                <h4 className="font-semibold text-gray-800 dark:text-white">What if I don't have a lot of data?</h4>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">That's actually perfect! We'll help you set up your business rules so you can start taking action immediately. You don't need years of data to benefit from GrowthGrid.</p>
+              </div>
+              <div className="rounded-xl bg-white/80 p-4 dark:bg-gray-800/80 border border-emerald-100 dark:border-emerald-900/30">
+                <h4 className="font-semibold text-gray-800 dark:text-white">How much does it cost?</h4>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">We offer a free 14-day trial with no credit card required. After that, our pricing starts at a monthly subscription that's less than what you'd spend on a single coffee per day.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* JUDGE/INVESTOR SENTENCE */}
           <div className="mt-16 w-full rounded-2xl border border-emerald-200 bg-white/50 p-6 text-center dark:border-emerald-800/50 dark:bg-gray-800/50">
             <p className="text-base text-gray-700 dark:text-gray-300">
               <span className="font-semibold text-emerald-600 dark:text-emerald-400">GrowthGrid</span> is a decision-support platform that helps small businesses prioritize the actions most likely to increase revenue and reduce customer loss.
             </p>
           </div>
 
-          {/* ACTION BUTTONS - Updated CTA wording */}
+          {/* CTA BUTTONS - Fixed */}
           <div className="mt-12 flex w-full flex-col gap-4 sm:flex-row sm:justify-center sm:gap-5">
             <Link
-              href="/login"
+              href="/register"
               className="group relative inline-flex h-12 w-full items-center justify-center overflow-hidden rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 px-8 text-sm font-semibold text-white shadow-lg transition-all duration-300 hover:shadow-xl hover:scale-105 hover:from-emerald-700 hover:to-teal-700 md:w-auto"
             >
               <span className="relative z-10 flex items-center gap-2">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-                Get My Action Plan
+                Create Free Account
               </span>
             </Link>
             
             <Link
-              href="/register"
+              href="/login"
               className="group relative inline-flex h-12 w-full items-center justify-center rounded-full border-2 border-emerald-500 bg-white/80 px-8 text-sm font-semibold text-emerald-700 backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:scale-105 hover:bg-emerald-50 dark:border-emerald-400 dark:bg-gray-900/80 dark:text-emerald-400 dark:hover:bg-emerald-950/50 md:w-auto"
             >
-              ✨ Start Free Trial
+              👋 Log In
             </Link>
           </div>
 
-          {/* Trust indicators */}
+          {/* TRUST INDICATORS */}
           <div className="mt-12 flex flex-wrap items-center justify-center gap-6 text-center">
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">

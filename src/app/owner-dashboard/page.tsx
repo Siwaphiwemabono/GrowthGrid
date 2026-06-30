@@ -16,6 +16,9 @@ interface Business {
   industry: string;
   business_size: string | null;
   created_at: string;
+  trial_start_date?: string;
+  trial_end_date?: string;
+  subscription_status?: string;
 }
 
 interface Employee {
@@ -45,6 +48,10 @@ interface Task {
   completed_at: string | null;
   industry: string | null;
   assigned_to_email: string | null;
+  client_name?: string | null;
+  client_email?: string | null;
+  document_uploaded?: boolean;
+  requires_document?: boolean;
 }
 
 interface OwnerProfile {
@@ -88,6 +95,28 @@ interface RiskAlert {
   source: string;
   action: string;
   customer?: string;
+}
+
+interface DocumentTask {
+  id: string;
+  task_id: number;
+  employee_id: string;
+  client_name: string;
+  client_email: string;
+  document_type: string;
+  document_url: string;
+  file_name: string;
+  file_size: number;
+  status: string;
+  created_at: string;
+  employee_name?: string;
+  employee_email?: string;
+}
+
+interface TrialInfo {
+  daysRemaining: number;
+  isTrial: boolean;
+  trialEndDate: string | null;
 }
 
 const INDUSTRY_TASKS: Record<string, string[]> = {
@@ -210,12 +239,17 @@ export default function OwnerDashboard() {
   const [priorityActions, setPriorityActions] = useState<PriorityAction[]>([]);
   const [revenueOpportunities, setRevenueOpportunities] = useState<RevenueOpportunity[]>([]);
   const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
+  const [recentDocuments, setRecentDocuments] = useState<DocumentTask[]>([]);
+  const [trialInfo, setTrialInfo] = useState<TrialInfo | null>(null);
 
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState("");
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showEmailPreview, setShowEmailPreview] = useState(false);
+  
+  const [taskClientName, setTaskClientName] = useState("");
+  const [taskClientEmail, setTaskClientEmail] = useState("");
   
   const [newEmployee, setNewEmployee] = useState({ email: "", name: "", surname: "" });
   const [newEmployeeCredentials, setNewEmployeeCredentials] = useState({ 
@@ -254,13 +288,23 @@ export default function OwnerDashboard() {
     refreshDisplayedTasks();
   }, [availableTasks]);
 
+  
+
+ 
+
   const generatePriorityActions = (tasks: Task[], employees: Employee[]) => {
     const actions: PriorityAction[] = [];
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    tasks
-      .filter(t => t.status !== "Completed" && t.due_date && new Date(t.due_date) < today)
+    const unassignedTasks = tasks.filter(t => 
+      t.status !== "Completed" && 
+      t.status !== "In Progress" &&
+      !t.assigned_to
+    );
+
+    unassignedTasks
+      .filter(t => t.due_date && new Date(t.due_date) < today)
       .forEach(task => {
         const daysOverdue = Math.floor((today.getTime() - new Date(task.due_date!).getTime()) / (1000 * 60 * 60 * 24));
         actions.push({
@@ -275,7 +319,7 @@ export default function OwnerDashboard() {
         });
       });
 
-    tasks
+    unassignedTasks
       .filter(t => t.priority === "High" && t.status === "Available")
       .forEach(task => {
         actions.push({
@@ -289,8 +333,8 @@ export default function OwnerDashboard() {
         });
       });
 
-    tasks
-      .filter(t => t.status !== "Completed" && t.due_date)
+    unassignedTasks
+      .filter(t => t.due_date)
       .forEach(task => {
         if (!task.due_date) return;
         const dueDate = new Date(task.due_date);
@@ -309,25 +353,8 @@ export default function OwnerDashboard() {
         }
       });
 
-    tasks
-      .filter(t => t.status === "In Progress" && t.created_at)
-      .forEach(task => {
-        const daysInProgress = Math.floor((now.getTime() - new Date(task.created_at).getTime()) / (1000 * 60 * 60 * 24));
-        if (daysInProgress > 3) {
-          actions.push({
-            id: `high-stuck-${task.id}`,
-            title: `⏳ Task Stalled: ${task.title}`,
-            description: `In progress for ${daysInProgress} days`,
-            priority: 'HIGH',
-            type: 'task',
-            action: `Check progress on "${task.title}"`,
-            task_id: task.id,
-          });
-        }
-      });
-
-    tasks
-      .filter(t => !t.assigned_to && t.status === "Available")
+    unassignedTasks
+      .filter(t => t.status === "Available")
       .slice(0, 3)
       .forEach(task => {
         actions.push({
@@ -543,6 +570,43 @@ export default function OwnerDashboard() {
         }
       }
 
+      // Fetch recent documents with employee names
+      if (businessData?.id) {
+        const { data: taskIds } = await db
+          .from("tasks")
+          .select("id")
+          .eq("business_id", businessData.id);
+
+        if (taskIds && taskIds.length > 0) {
+          const taskIdList = taskIds.map(t => t.id);
+          const { data: docData, error: docError } = await db
+            .from("document_tasks")
+            .select("*")
+            .in("task_id", taskIdList)
+            .order("created_at", { ascending: false })
+            .limit(10);
+
+          if (!docError && docData) {
+            const enrichedDocs = await Promise.all(
+              docData.map(async (doc: DocumentTask) => {
+                const { data: employeeData } = await db
+                  .from("employees")
+                  .select("name, surname, email")
+                  .eq("profile_id", doc.employee_id)
+                  .maybeSingle();
+
+                return {
+                  ...doc,
+                  employee_name: employeeData ? `${employeeData.name} ${employeeData.surname}` : 'Unknown',
+                  employee_email: employeeData?.email || 'Unknown',
+                };
+              })
+            );
+            setRecentDocuments(enrichedDocs);
+          }
+        }
+      }
+
       const actions = generatePriorityActions(tasksData, employeesData);
       setPriorityActions(actions);
 
@@ -618,35 +682,81 @@ export default function OwnerDashboard() {
     try {
       const assignToId = employee.profile_id || employee.id;
 
+      const updateData: any = {
+        assigned_to: assignToId,
+        assigned_to_email: employee.email,
+        status: "In Progress",
+        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      };
+
+      if (taskClientName) {
+        updateData.client_name = taskClientName;
+      }
+      if (taskClientEmail) {
+        updateData.client_email = taskClientEmail;
+      }
+
       const { error: updateError } = await db
         .from("tasks")
-        .update({
-          assigned_to: assignToId,
-          assigned_to_email: employee.email,
-          status: "In Progress",
-          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        })
+        .update(updateData)
         .eq("id", selectedTask.id);
 
       if (updateError) {
         console.error("❌ Task update error:", updateError);
         setMessage({ type: "error", text: updateError.message });
       } else {
+        const notificationMessage = taskClientName 
+          ? `You have been assigned: "${selectedTask.title}" for client: ${taskClientName}`
+          : `You have been assigned: "${selectedTask.title}"`;
+
         await db
           .from("notifications")
           .insert({
             user_id: assignToId,
             title: "New Task Assigned 📋",
-            message: `You have been assigned: "${selectedTask.title}"`,
+            message: notificationMessage,
             type: "task_assigned",
             link: `/tasks/${selectedTask.id}`,
             read: false,
           });
 
-        setMessage({ type: "success", text: `✅ Task assigned to ${employee.name}` });
+        setMessage({ 
+          type: "success", 
+          text: `✅ Task assigned to ${employee.name}${taskClientName ? ` for client: ${taskClientName}` : ''}` 
+        });
+        
         setShowAssignModal(false);
         setSelectedTask(null);
         setSelectedEmployee("");
+        setTaskClientName("");
+        setTaskClientEmail("");
+        
+        const updatedAvailableTasks = availableTasks.filter(t => t.id !== selectedTask.id);
+        setAvailableTasks(updatedAvailableTasks);
+        
+        const updatedDisplayedTasks = displayedTasks.filter(t => t.id !== selectedTask.id);
+        setDisplayedTasks(updatedDisplayedTasks);
+        
+        const assignedTask = {
+          ...selectedTask,
+          assigned_to: assignToId,
+          assigned_to_email: employee.email,
+          status: "In Progress",
+          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          client_name: taskClientName || null,
+          client_email: taskClientEmail || null,
+        };
+        setActiveTasks([assignedTask, ...activeTasks]);
+
+        const allTasks = [
+          ...updatedAvailableTasks,
+          ...activeTasks,
+          ...completedTasks,
+          assignedTask,
+        ];
+        const actions = generatePriorityActions(allTasks, employees);
+        setPriorityActions(actions);
+
         fetchAllData();
       }
     } catch (err: any) {
@@ -658,6 +768,14 @@ export default function OwnerDashboard() {
 
   const completeTask = async (taskId: number) => {
     try {
+      const taskToComplete = activeTasks.find(t => t.id === taskId);
+      
+      const { data: taskDetails } = await db
+        .from("tasks")
+        .select("assigned_by, assigned_to, title, assigned_to_email")
+        .eq("id", taskId)
+        .single();
+
       const { error: updateError } = await db
         .from("tasks")
         .update({ 
@@ -665,11 +783,45 @@ export default function OwnerDashboard() {
           completed_at: new Date().toISOString()
         })
         .eq("id", taskId);
-      
+        
       if (updateError) {
         setMessage({ type: "error", text: updateError.message });
       } else {
         setMessage({ type: "success", text: "✅ Task completed!" });
+        
+        if (taskDetails?.assigned_by) {
+          await db
+            .from("notifications")
+            .insert({
+              user_id: taskDetails.assigned_by,
+              title: "✅ Task Completed",
+              message: `Employee completed: "${taskDetails.title}"`,
+              type: "task_completed",
+              link: `/tasks/${taskId}`,
+              read: false,
+            });
+        }
+        
+        const updatedActiveTasks = activeTasks.filter(t => t.id !== taskId);
+        setActiveTasks(updatedActiveTasks);
+        
+        if (taskToComplete) {
+          const completedTask = {
+            ...taskToComplete,
+            status: "Completed",
+            completed_at: new Date().toISOString(),
+          };
+          setCompletedTasks([completedTask, ...completedTasks]);
+        }
+        
+        const allTasks = [
+          ...availableTasks,
+          ...updatedActiveTasks,
+          ...completedTasks,
+        ];
+        const actions = generatePriorityActions(allTasks, employees);
+        setPriorityActions(actions);
+        
         fetchAllData();
       }
     } catch (err: any) {
@@ -881,6 +1033,32 @@ export default function OwnerDashboard() {
           border-left: 4px solid #9CA3AF;
         }
         .action-low:hover { background: #F3F4F6; }
+        .document-card {
+          transition: all 0.2s;
+        }
+        .document-card:hover {
+          background-color: #F9FAFB;
+        }
+        .modal-input {
+          transition: all 0.2s;
+        }
+        .modal-input:focus {
+          border-color: #059669;
+          ring: 2px solid rgba(5, 150, 105, 0.2);
+        }
+        .trial-banner {
+          animation: slideDown 0.5s ease-out;
+        }
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
       `}</style>
 
       <nav className="bg-white/90 backdrop-blur-md border-b border-emerald-100 sticky top-0 z-50">
@@ -955,6 +1133,33 @@ export default function OwnerDashboard() {
           </div>
         )}
 
+        {/* 🎉 TRIAL BANNER */}
+        {trialInfo?.isTrial && (
+          <div className="mb-6 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-2xl p-6 text-white shadow-lg trial-banner">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center gap-3">
+                <div className="h-12 w-12 rounded-full bg-white/20 flex items-center justify-center">
+                  <span className="text-2xl">🎉</span>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-lg">Welcome to GrowthGrid!</h3>
+                  <p className="text-emerald-100 text-sm">
+                    Your 14-day free trial has started.
+                    <span className="font-bold ml-2">
+                      {trialInfo.daysRemaining} days remaining
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <div className="bg-white/20 px-4 py-2 rounded-lg backdrop-blur-sm">
+                <p className="text-sm font-medium">
+                  ⏳ {trialInfo.daysRemaining} days left
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-800">
             Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, {ownerFirstName} 👋
@@ -962,7 +1167,7 @@ export default function OwnerDashboard() {
           <p className="text-gray-500 mt-1">Welcome back to {business?.business_name || 'GrowthGrid'} dashboard</p>
         </div>
 
-        {/* 🔴 TODAY'S PRIORITY ACTIONS */}
+        {/* Today's Priority Actions */}
         {priorityActions.length > 0 && (
           <div className="mb-8 bg-gradient-to-r from-red-50 via-yellow-50 to-emerald-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
             <div className="flex items-center justify-between mb-4">
@@ -1002,6 +1207,8 @@ export default function OwnerDashboard() {
                                      activeTasks.find(t => t.id === action.task_id);
                         if (task) {
                           setSelectedTask(task);
+                          setTaskClientName(task.client_name || "");
+                          setTaskClientEmail(task.client_email || "");
                           setShowAssignModal(true);
                         }
                       }
@@ -1027,6 +1234,8 @@ export default function OwnerDashboard() {
                                          activeTasks.find(t => t.id === action.task_id);
                             if (task) {
                               setSelectedTask(task);
+                              setTaskClientName(task.client_name || "");
+                              setTaskClientEmail(task.client_email || "");
                               setShowAssignModal(true);
                             }
                           }}
@@ -1042,7 +1251,7 @@ export default function OwnerDashboard() {
           </div>
         )}
 
-        {/* 💰 REVENUE OPPORTUNITIES - ADDED */}
+        {/* Revenue Opportunities */}
         {revenueOpportunities.length > 0 && (
           <div className="mb-8 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
             <div className="flex items-center justify-between mb-4">
@@ -1086,6 +1295,8 @@ export default function OwnerDashboard() {
                         const task = availableTasks.find(t => opp.id.includes(String(t.id)));
                         if (task) {
                           setSelectedTask(task);
+                          setTaskClientName(task.client_name || "");
+                          setTaskClientEmail(task.client_email || "");
                           setShowAssignModal(true);
                         }
                       }}
@@ -1099,7 +1310,7 @@ export default function OwnerDashboard() {
           </div>
         )}
 
-        {/* ⚠️ RISK ALERTS - ADDED */}
+        {/* Risk Alerts */}
         {riskAlerts.length > 0 && (
           <div className="mb-8 bg-gradient-to-r from-red-50 to-orange-50 rounded-2xl p-6 border border-red-200 shadow-sm">
             <div className="flex items-center justify-between mb-4">
@@ -1152,6 +1363,8 @@ export default function OwnerDashboard() {
                                      activeTasks.find(t => alert.id.includes(String(t.id)));
                         if (task) {
                           setSelectedTask(task);
+                          setTaskClientName(task.client_name || "");
+                          setTaskClientEmail(task.client_email || "");
                           setShowAssignModal(true);
                         }
                       }}
@@ -1287,6 +1500,7 @@ export default function OwnerDashboard() {
 
         {/* Task Board */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Available Tasks */}
           <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-yellow-50 to-yellow-100/50 border-b border-yellow-200 flex justify-between items-center">
               <div>
@@ -1317,16 +1531,29 @@ export default function OwnerDashboard() {
                   {displayedTasks.map((task) => (
                     <div key={task.id} className="p-4 bg-white rounded-xl hover:shadow-md transition-all border border-gray-200 hover:border-yellow-300">
                       <div className="flex items-start justify-between">
-                        <div className="flex-1 cursor-pointer" onClick={() => { setSelectedTask(task); setShowAssignModal(true); }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedTask(task); setShowAssignModal(true); } }}>
+                        <div className="flex-1 cursor-pointer" onClick={() => { 
+                          setSelectedTask(task);
+                          setTaskClientName(task.client_name || "");
+                          setTaskClientEmail(task.client_email || "");
+                          setShowAssignModal(true); 
+                        }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedTask(task); setTaskClientName(task.client_name || ""); setTaskClientEmail(task.client_email || ""); setShowAssignModal(true); } }}>
                           <p className="font-medium text-gray-800 text-sm">{task.title}</p>
                           <div className="flex items-center gap-2 mt-1.5">
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${task.priority === "High" ? "bg-red-100 text-red-700" : task.priority === "Medium" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-700"}`}>
                               {task.priority}
                             </span>
                             <span className="text-xs text-gray-400">ID: #{task.id}</span>
+                            {task.client_name && (
+                              <span className="text-xs text-emerald-600">👤 {task.client_name}</span>
+                            )}
                           </div>
                         </div>
-                        <button type="button" className="ml-2 text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium transition" onClick={() => { setSelectedTask(task); setShowAssignModal(true); }}>
+                        <button type="button" className="ml-2 text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-medium transition" onClick={() => { 
+                          setSelectedTask(task);
+                          setTaskClientName(task.client_name || "");
+                          setTaskClientEmail(task.client_email || "");
+                          setShowAssignModal(true); 
+                        }}>
                           Assign →
                         </button>
                       </div>
@@ -1344,6 +1571,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
+          {/* Active Tasks */}
           <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-blue-50 to-blue-100/50 border-b border-blue-200">
               <div className="flex justify-between items-center">
@@ -1370,6 +1598,11 @@ export default function OwnerDashboard() {
                   {activeTasks.slice(0, 10).map((task) => (
                     <div key={task.id} className="p-4 bg-white rounded-xl border border-blue-100 hover:shadow-md transition">
                       <p className="font-medium text-gray-800 text-sm">{task.title}</p>
+                      {task.client_name && (
+                        <div className="mt-1 text-xs text-emerald-600">
+                          👤 Client: {task.client_name} {task.client_email && `(${task.client_email})`}
+                        </div>
+                      )}
                       <div className="flex items-center justify-between mt-2">
                         <div className="flex items-center gap-2">
                           <div className="h-6 w-6 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-xs font-medium">
@@ -1391,6 +1624,7 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
+          {/* Completed Tasks */}
           <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-green-50 to-green-100/50 border-b border-green-200">
               <div className="flex justify-between items-center">
@@ -1424,6 +1658,9 @@ export default function OwnerDashboard() {
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-xs text-gray-500">👤 {task.assigned_to}</span>
                           <span className="text-xs text-green-600">Completed</span>
+                          {task.client_name && (
+                            <span className="text-xs text-emerald-600">👤 {task.client_name}</span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1434,6 +1671,66 @@ export default function OwnerDashboard() {
           </div>
         </div>
 
+        {/* Recent Documents */}
+        <div className="mt-8 bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <h2 className="font-semibold text-gray-800">📄 Recent Documents</h2>
+              <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{recentDocuments.length}</span>
+            </div>
+          </div>
+          {recentDocuments.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">
+              <div className="text-4xl mb-3">📭</div>
+              <p>No documents uploaded yet</p>
+              <p className="text-sm text-gray-400 mt-1">Documents will appear here when employees upload them</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {recentDocuments.map((doc) => (
+                <div key={doc.id} className="p-4 hover:bg-gray-50 transition document-card">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-gray-800">{doc.file_name}</p>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                          {doc.status}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-4 text-sm text-gray-500 mt-1">
+                        <span>📋 {doc.document_type}</span>
+                        <span>👤 {doc.employee_name || 'Unknown'}</span>
+                        <span className="flex items-center gap-1">
+                          <span className="text-emerald-600">👤 Client:</span>
+                          <span className="font-medium text-gray-700">{doc.client_name}</span>
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="text-emerald-600">📧</span>
+                          <span className="text-gray-600">{doc.client_email}</span>
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">
+                        Uploaded: {new Date(doc.created_at).toLocaleDateString()} at {new Date(doc.created_at).toLocaleTimeString()}
+                      </div>
+                    </div>
+                    <div className="flex gap-2 ml-4 flex-shrink-0">
+                      <a
+                        href={doc.document_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition flex items-center gap-1"
+                      >
+                        📄 View
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Team Members */}
         <div className="mt-8 bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
             <div className="flex items-center gap-3">
@@ -1465,7 +1762,6 @@ export default function OwnerDashboard() {
           )}
         </div>
       </div>
-
       {/* Modals */}
       {showEmailPreview && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -1563,11 +1859,45 @@ export default function OwnerDashboard() {
         </div>
       )}
 
+      {/* Assign Modal with Client Info Fields */}
       {showAssignModal && selectedTask && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <h2 className="text-xl font-bold mb-2">Assign Task</h2>
             <p className="text-gray-600 mb-4"><strong>{selectedTask.title}</strong></p>
+            
+            {/* Client Information Fields */}
+            <div className="mb-4 space-y-3">
+              <div>
+                <label htmlFor="client-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Client Name <span className="text-gray-400 text-xs">(optional)</span>
+                </label>
+                <input
+                  id="client-name"
+                  type="text"
+                  value={taskClientName}
+                  onChange={(e) => setTaskClientName(e.target.value)}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500 modal-input"
+                  placeholder="Enter client name"
+                  aria-label="Client Name"
+                />
+              </div>
+              <div>
+                <label htmlFor="client-email" className="block text-sm font-medium text-gray-700 mb-1">
+                  Client Email <span className="text-gray-400 text-xs">(optional)</span>
+                </label>
+                <input
+                  id="client-email"
+                  type="email"
+                  value={taskClientEmail}
+                  onChange={(e) => setTaskClientEmail(e.target.value)}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500 modal-input"
+                  placeholder="client@example.com"
+                  aria-label="Client Email"
+                />
+              </div>
+            </div>
+            
             <div className="mb-4">
               <label htmlFor="employee-select" className="block text-sm font-medium text-gray-700 mb-2">Select Employee</label>
               <select id="employee-select" value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} className="w-full px-4 py-2 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" aria-required="true">
@@ -1577,7 +1907,13 @@ export default function OwnerDashboard() {
             </div>
             <div className="flex gap-3">
               <button type="button" onClick={assignTask} disabled={submitting} className="flex-1 bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700 transition disabled:opacity-50">{submitting ? "Assigning..." : "Assign Task"}</button>
-              <button type="button" onClick={() => { setShowAssignModal(false); setSelectedTask(null); setSelectedEmployee(""); }} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition">Cancel</button>
+              <button type="button" onClick={() => { 
+                setShowAssignModal(false); 
+                setSelectedTask(null); 
+                setSelectedEmployee("");
+                setTaskClientName("");
+                setTaskClientEmail("");
+              }} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-400 transition">Cancel</button>
             </div>
           </div>
         </div>

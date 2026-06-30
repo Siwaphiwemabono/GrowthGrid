@@ -6,13 +6,36 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { db } from "@/db/db";
-import type { Task, Employee, Business } from "@/db/schema";
+import type { Task as BaseTask, Employee, Business } from "@/db/schema";
 import NotificationBell from "@/app/components/notifications/NotificationBell";
+import DocumentUpload from "@/app/components/DocumentUpload";
+
+// Extend the Task type to include client fields
+interface Task extends BaseTask {
+  client_name?: string | null;
+  client_email?: string | null;
+  document_uploaded?: boolean;
+  document_url?: string | null;
+  document_type?: string | null;
+}
 
 // Extended Task type for dashboard display
 interface DashboardTask extends Task {
   assigned_by_name?: string;
   assigned_by_email?: string;
+  has_document?: boolean;
+}
+
+interface DocumentInfo {
+  id: string;
+  task_id: number;
+  client_name: string;
+  client_email: string;
+  document_type: string;
+  document_url: string;
+  file_name: string;
+  status: string;
+  created_at: string;
 }
 
 export default function EmployeeDashboard() {
@@ -25,6 +48,10 @@ export default function EmployeeDashboard() {
   const [business, setBusiness] = useState<Business | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState("All Tasks");
+  const [showDocumentUpload, setShowDocumentUpload] = useState(false);
+  const [selectedTaskForDoc, setSelectedTaskForDoc] = useState<Task | null>(null);
+  const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+  const [documentStatus, setDocumentStatus] = useState<{ [key: number]: { hasDoc: boolean, clientName?: string, clientEmail?: string } }>({});
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -132,8 +159,45 @@ export default function EmployeeDashboard() {
         }
       }
 
+      // Get document info for all tasks
+      const taskIds = finalTasks.map((t: any) => t.id);
+      let docMap: { [key: number]: any } = {};
+      
+      if (taskIds.length > 0) {
+        const { data: docData, error: docError } = await db
+          .from("document_tasks")
+          .select("task_id, client_name, client_email, document_type, document_url, file_name, id, status, created_at")
+          .in("task_id", taskIds);
+
+        if (!docError && docData) {
+          docData.forEach((doc: any) => {
+            if (!docMap[doc.task_id]) {
+              docMap[doc.task_id] = [];
+            }
+            docMap[doc.task_id].push(doc);
+          });
+        }
+      }
+
+      // Enrich tasks with document info
+      const tasksWithDocs = finalTasks.map((task: DashboardTask) => {
+        const taskDocs = docMap[task.id] || [];
+        const latestDoc = taskDocs[0] || null;
+        
+        return {
+          ...task,
+          client_name: task.client_name || latestDoc?.client_name || null,
+          client_email: task.client_email || latestDoc?.client_email || null,
+          document_type: task.document_type || latestDoc?.document_type || null,
+          document_url: task.document_url || latestDoc?.document_url || null,
+          _documents: taskDocs,
+          has_document: taskDocs.length > 0,
+        };
+      });
+
+      // Get assigner names
       const tasksWithNames = await Promise.all(
-        finalTasks.map(async (task: DashboardTask) => {
+        tasksWithDocs.map(async (task: DashboardTask) => {
           if (task.assigned_by) {
             const { data: assigner } = await db
               .from("profiles")
@@ -150,6 +214,19 @@ export default function EmployeeDashboard() {
       );
 
       setTasks(tasksWithNames);
+      
+      // Update document status map
+      const statusMap: { [key: number]: { hasDoc: boolean, clientName?: string, clientEmail?: string } } = {};
+      tasksWithNames.forEach((task: any) => {
+        statusMap[task.id] = {
+          hasDoc: task.has_document || false,
+          clientName: task.client_name || undefined,
+          clientEmail: task.client_email || undefined,
+        };
+      });
+      
+      setDocumentStatus(statusMap);
+      
       console.log(`✅ Loaded ${tasksWithNames.length} tasks for employee`);
     } catch (error) {
       console.error("❌ Load tasks error:", error);
@@ -157,15 +234,58 @@ export default function EmployeeDashboard() {
     }
   };
 
+  const fetchDocuments = async (taskId: number) => {
+    try {
+      const { data, error } = await db
+        .from("document_tasks")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setDocuments(data);
+      }
+    } catch (error) {
+      console.error("Error fetching documents:", error);
+    }
+  };
+
+  const handleOpenDocumentUpload = async (task: Task) => {
+    setSelectedTaskForDoc(task);
+    setShowDocumentUpload(true);
+    if (task.id) {
+      await fetchDocuments(task.id);
+    }
+  };
+
   const handleLogout = async () => {
     router.push("/login");
   };
 
+  // Simplified: Only two statuses - "Active" and "Completed"
   const updateTaskStatus = async (taskId: number, newStatus: string) => {
     try {
+      const { data: taskDetails, error: taskError } = await db
+        .from("tasks")
+        .select("assigned_by, title, assigned_to_email")
+        .eq("id", taskId)
+        .single();
+
+      if (taskError) {
+        console.error("❌ Task details error:", taskError);
+        return;
+      }
+
+      // If status is "Active", set it to "In Progress" (which means Active)
+      // If status is "Completed", set it to "Completed"
+      const dbStatus = newStatus === "Active" ? "In Progress" : "Completed";
+
       const { error: updateError } = await db
         .from("tasks")
-        .update({ status: newStatus })
+        .update({ 
+          status: dbStatus,
+          completed_at: newStatus === "Completed" ? new Date().toISOString() : null
+        })
         .eq("id", taskId);
 
       if (updateError) {
@@ -173,9 +293,33 @@ export default function EmployeeDashboard() {
         return;
       }
 
-      setTasks(tasks.map(task => 
-        task.id === taskId ? { ...task, status: newStatus } : task
-      ));
+      // Send notification if task is completed
+      if (newStatus === "Completed" && taskDetails?.assigned_by) {
+        await db
+          .from("notifications")
+          .insert({
+            user_id: taskDetails.assigned_by,
+            title: "✅ Task Completed",
+            message: `Employee completed: "${taskDetails.title}"`,
+            type: "task_completed",
+            link: `/tasks/${taskId}`,
+            read: false,
+          });
+        console.log(`✅ Notification sent to owner: Task "${taskDetails.title}" completed`);
+      }
+
+      // Update tasks state
+      setTasks(prevTasks => 
+        prevTasks.map(task => 
+          task.id === taskId ? { 
+            ...task, 
+            status: newStatus, // Store as "Active" or "Completed" for display
+            completed_at: newStatus === "Completed" ? new Date().toISOString() : task.completed_at
+          } : task
+        )
+      );
+
+      console.log(`✅ Task ${taskId} status updated to: ${newStatus}`);
     } catch (error) {
       console.error("❌ Update task error:", error);
     }
@@ -184,8 +328,7 @@ export default function EmployeeDashboard() {
   const getStatusColor = (status: string) => {
     switch(status) {
       case 'Completed': return 'bg-green-100 text-green-700';
-      case 'In Progress': return 'bg-yellow-100 text-yellow-700';
-      case 'Pending': return 'bg-red-100 text-red-700';
+      case 'Active': return 'bg-yellow-100 text-yellow-700';
       default: return 'bg-gray-100 text-gray-700';
     }
   };
@@ -208,23 +351,35 @@ export default function EmployeeDashboard() {
     }
   };
 
-  // Get priority tasks for the "Today's Focus" section
+  const requiresDocument = (task: Task): boolean => {
+    const docKeywords = [
+      'quote', 'quotation', 'proposal', 'invoice', 'contract', 
+      'document', 'send to', 'email', 'client', 'customer',
+      'estimate', 'bid', 'tender', 'offer', 'agreement'
+    ];
+    const text = `${task.title} ${task.description || ''}`.toLowerCase();
+    return docKeywords.some(keyword => text.includes(keyword));
+  };
+
+  // Simplified stats: Only Total, Active, Completed
+  const stats = {
+    totalTasks: tasks.length,
+    active: tasks.filter(t => t.status !== "Completed" && t.status !== "Completed").length,
+    completed: tasks.filter(t => t.status === "Completed").length,
+  };
+
+  const progress = stats.totalTasks > 0 ? Math.round((stats.completed / stats.totalTasks) * 100) : 0;
+
   const priorityTasks = tasks
     .filter(t => t.status !== "Completed" && (t.priority === "Urgent" || t.priority === "High"))
     .slice(0, 3);
 
+  // Filter tasks: "All Tasks", "Active", "Completed"
   const filteredTasks = filterStatus === "All Tasks" 
     ? tasks 
-    : tasks.filter(task => task.status === filterStatus);
-
-  const stats = {
-    totalTasks: tasks.length,
-    completed: tasks.filter(t => t.status === "Completed").length,
-    inProgress: tasks.filter(t => t.status === "In Progress").length,
-    pending: tasks.filter(t => t.status === "Pending").length,
-  };
-
-  const progress = stats.totalTasks > 0 ? Math.round((stats.completed / stats.totalTasks) * 100) : 0;
+    : filterStatus === "Active"
+      ? tasks.filter(task => task.status !== "Completed")
+      : tasks.filter(task => task.status === "Completed");
 
   if (loading || status === "loading") {
     return (
@@ -287,6 +442,12 @@ export default function EmployeeDashboard() {
         }
         .focus-item:hover {
           transform: translateX(4px);
+        }
+        .client-info {
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          border-radius: 0.5rem;
+          padding: 0.5rem 0.75rem;
         }
       `}</style>
 
@@ -385,7 +546,7 @@ export default function EmployeeDashboard() {
           <p className="text-gray-500 text-sm">Here's what you need to focus on today</p>
         </div>
 
-        {/* 🎯 TODAY'S FOCUS - New Section */}
+        {/* 🎯 TODAY'S FOCUS */}
         {priorityTasks.length > 0 && (
           <div className="mb-6 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-200">
             <div className="flex items-center gap-2 mb-2">
@@ -410,8 +571,8 @@ export default function EmployeeDashboard() {
           </div>
         )}
 
-        {/* Stats Grid - Compact */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        {/* Stats Grid - Simplified: Total, Active, Completed */}
+        <div className="grid grid-cols-3 gap-3 mb-6">
           <div className="stat-card">
             <div className="flex items-center justify-between">
               <div>
@@ -421,6 +582,20 @@ export default function EmployeeDashboard() {
               <div className="h-9 w-9 rounded-full bg-emerald-100 flex items-center justify-center">
                 <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Active</p>
+                <p className="text-xl font-bold text-yellow-600">{stats.active}</p>
+              </div>
+              <div className="h-9 w-9 rounded-full bg-yellow-100 flex items-center justify-center">
+                <svg className="h-5 w-5 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
             </div>
@@ -439,37 +614,9 @@ export default function EmployeeDashboard() {
               </div>
             </div>
           </div>
-
-          <div className="stat-card">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-gray-500 font-medium">In Progress</p>
-                <p className="text-xl font-bold text-yellow-600">{stats.inProgress}</p>
-              </div>
-              <div className="h-9 w-9 rounded-full bg-yellow-100 flex items-center justify-center">
-                <svg className="h-5 w-5 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-gray-500 font-medium">Pending</p>
-                <p className="text-xl font-bold text-red-600">{stats.pending}</p>
-              </div>
-              <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center">
-                <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
         </div>
 
-        {/* Progress Bar - New Section */}
+        {/* Progress Bar */}
         <div className="mb-6 bg-white rounded-xl shadow-sm p-4 border border-emerald-100">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-700">My Progress</span>
@@ -483,7 +630,7 @@ export default function EmployeeDashboard() {
           </div>
         </div>
 
-        {/* Productivity Tip - Cleaner */}
+        {/* Productivity Tip */}
         <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-xl p-4 mb-6 text-white">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
@@ -502,7 +649,7 @@ export default function EmployeeDashboard() {
           </div>
         </div>
 
-        {/* My Tasks Section - with ID for scrolling */}
+        {/* My Tasks Section */}
         <div id="my-tasks" className="bg-white rounded-xl shadow-sm border border-emerald-100 overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center flex-wrap gap-3">
             <div>
@@ -516,8 +663,7 @@ export default function EmployeeDashboard() {
               aria-label="Filter tasks by status"
             >
               <option value="All Tasks">All Tasks</option>
-              <option value="Pending">Pending</option>
-              <option value="In Progress">In Progress</option>
+              <option value="Active">Active</option>
               <option value="Completed">Completed</option>
             </select>
           </div>
@@ -525,58 +671,106 @@ export default function EmployeeDashboard() {
           <div className="divide-y divide-gray-100">
             {filteredTasks.length === 0 ? (
               <div className="p-6 text-center text-gray-500">
-                <p className="text-sm">No tasks {filterStatus !== "All Tasks" ? `with status "${filterStatus}"` : "assigned to you"}</p>
+                <p className="text-sm">No {filterStatus !== "All Tasks" ? filterStatus.toLowerCase() : ""} tasks</p>
                 <p className="text-xs text-gray-400 mt-1">Check back later for new tasks</p>
               </div>
             ) : (
-              filteredTasks.map((task) => (
-                <div key={task.id} className="task-item p-3 hover:bg-gray-50 transition">
-                  <div className="flex items-start justify-between flex-wrap gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className={`text-sm font-semibold ${task.status === 'Completed' ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
-                          {task.title}
-                        </h3>
-                        <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded-full border ${getPriorityColor(task.priority || 'Medium')}`}>
-                          {getPriorityIcon(task.priority || 'Medium')} {task.priority || 'Medium'}
-                        </span>
-                        {task.status === 'Completed' && (
-                          <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">✅ Done</span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-3 text-xs text-gray-500 mt-0.5">
-                        <span>Assigned by: {task.assigned_by_name || 'Unknown'}</span>
-                        {task.due_date && (
-                          <span>Due: {new Date(task.due_date).toLocaleDateString()}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      {task.status !== 'Completed' ? (
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={task.status || 'Pending'}
-                            onChange={(e) => updateTaskStatus(task.id, e.target.value)}
-                            className={`px-2 py-0.5 text-xs font-medium rounded-full border-0 focus:ring-2 focus:ring-emerald-500 ${getStatusColor(task.status || 'Pending')}`}
-                            aria-label={`Update status for task: ${task.title}`}
-                          >
-                            <option value="Pending">Pending</option>
-                            <option value="In Progress">In Progress</option>
-                            <option value="Completed">Completed</option>
-                          </select>
+              filteredTasks.map((task: any) => {
+                const needsDoc = requiresDocument(task);
+                const hasDoc = documentStatus[task.id]?.hasDoc || false;
+                const clientName = documentStatus[task.id]?.clientName || task.client_name;
+                const clientEmail = documentStatus[task.id]?.clientEmail || task.client_email;
+                const isCompleted = task.status === "Completed";
+                const displayStatus = isCompleted ? "Completed" : "Active";
+                
+                return (
+                  <div key={task.id} className="task-item p-3 hover:bg-gray-50 transition">
+                    <div className="flex items-start justify-between flex-wrap gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className={`text-sm font-semibold ${isCompleted ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
+                            {task.title}
+                          </h3>
+                          <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded-full border ${getPriorityColor(task.priority || 'Medium')}`}>
+                            {getPriorityIcon(task.priority || 'Medium')} {task.priority || 'Medium'}
+                          </span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${isCompleted ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                            {displayStatus}
+                          </span>
+                          {needsDoc && !hasDoc && !isCompleted && (
+                            <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full">📎 Document Required</span>
+                          )}
+                          {hasDoc && (
+                            <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">📄 Document Uploaded</span>
+                          )}
                         </div>
-                      ) : (
-                        <span className="text-xs text-gray-400">Done ✓</span>
-                      )}
+
+                        {/* Client Information */}
+                        {clientName && (
+                          <div className="mt-2 client-info">
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-emerald-700">👤</span>
+                              <span className="font-medium text-emerald-800">Client:</span>
+                              <span className="text-emerald-700 font-medium">{clientName}</span>
+                              <span className="text-emerald-400">|</span>
+                              <span className="text-emerald-600">{clientEmail}</span>
+                              {hasDoc && (
+                                <span className="ml-auto text-emerald-600 text-xs">📄 Document uploaded</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-3 text-xs text-gray-500 mt-1">
+                          <span>Assigned by: {task.assigned_by_name || 'Unknown'}</span>
+                          {task.due_date && (
+                            <span>Due: {new Date(task.due_date).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        {!isCompleted ? (
+                          <div className="flex items-center gap-2">
+                            {needsDoc && !hasDoc && (
+                              <button
+                                onClick={() => handleOpenDocumentUpload(task)}
+                                className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition"
+                              >
+                                📎 Upload
+                              </button>
+                            )}
+                            {hasDoc && (
+                              <button
+                                onClick={() => handleOpenDocumentUpload(task)}
+                                className="px-2 py-0.5 text-xs bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition"
+                              >
+                                📄 View Documents
+                              </button>
+                            )}
+                            {/* Simplified: Just Active and Completed */}
+                            <select
+                              value="Active"
+                              onChange={(e) => updateTaskStatus(task.id, e.target.value)}
+                              className="px-2 py-0.5 text-xs font-medium rounded-full border-0 focus:ring-2 focus:ring-emerald-500 bg-yellow-100 text-yellow-700"
+                              aria-label={`Update status for task: ${task.title}`}
+                            >
+                              <option value="Active">Active</option>
+                              <option value="Completed">✅ Complete</option>
+                            </select>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">Done ✓</span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
 
-        {/* Recent Activity - Cleaner */}
+        {/* Recent Activity */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
           <div className="bg-white rounded-xl shadow-sm border border-emerald-100 p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -611,17 +805,118 @@ export default function EmployeeDashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h3 className="text-sm font-semibold text-gray-800">Announcements</h3>
+              <h3 className="text-sm font-semibold text-gray-800">My Clients</h3>
             </div>
             <div className="space-y-2">
-              <p className="text-xs text-gray-600">🎉 Q3 performance reviews coming up next week</p>
-              <p className="text-xs text-gray-600">📊 New reporting dashboard available</p>
-              <p className="text-xs text-gray-600">💡 Training session on Thursday at 2 PM</p>
+              {(() => {
+                const clients = tasks
+                  .filter(t => t.client_name && t.status !== "Completed")
+                  .map(t => ({ name: t.client_name, email: t.client_email }));
+                
+                const uniqueClients = Array.from(
+                  new Map(clients.map(c => [c.email, c])).values()
+                );
+                
+                if (uniqueClients.length > 0) {
+                  return uniqueClients.slice(0, 3).map((client, index) => (
+                    <div key={index} className="flex items-center gap-2 text-sm">
+                      <span className="text-xs">👤</span>
+                      <span className="text-gray-700 text-xs font-medium">{client.name}</span>
+                      <span className="text-gray-400 text-xs">{client.email}</span>
+                    </div>
+                  ));
+                } else {
+                  return <p className="text-xs text-gray-500">No clients assigned yet</p>;
+                }
+              })()}
             </div>
           </div>
         </div>
 
       </div>
+
+      {/* Document Upload Modal */}
+      {showDocumentUpload && selectedTaskForDoc && user?.id && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-800">📎 Upload Document</h2>
+              <button
+                onClick={() => setShowDocumentUpload(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              Uploading document for: <strong>{selectedTaskForDoc.title}</strong>
+            </p>
+
+            {/* Show client info in the upload modal */}
+            {(() => {
+              const taskWithClient = tasks.find(t => t.id === selectedTaskForDoc.id);
+              if (taskWithClient?.client_name) {
+                return (
+                  <div className="mb-4 p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+                    <p className="text-sm text-emerald-800">
+                      <span className="font-semibold">👤 Client:</span> {taskWithClient.client_name}
+                      {taskWithClient.client_email && (
+                        <span className="ml-2 text-emerald-600">({taskWithClient.client_email})</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-emerald-600 mt-1">
+                      This document will be sent to this client
+                    </p>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            <DocumentUpload
+              taskId={selectedTaskForDoc.id}
+              employeeId={user.id}
+              clientName={selectedTaskForDoc.client_name || ""}
+              clientEmail={selectedTaskForDoc.client_email || ""}
+              taskTitle={selectedTaskForDoc.title}
+              onUploadComplete={() => {
+                setShowDocumentUpload(false);
+                if (user) {
+                  loadTasks(user);
+                }
+              }}
+            />
+
+            {documents.length > 0 && (
+              <div className="mt-4">
+                <h4 className="text-sm font-semibold text-gray-700 mb-2">Previous Documents</h4>
+                <div className="space-y-2">
+                  {documents.map((doc) => (
+                    <div key={doc.id} className="p-3 bg-gray-50 rounded-lg flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{doc.file_name}</p>
+                        <p className="text-xs text-gray-500">
+                          {doc.document_type} • Sent to {doc.client_name}
+                          <span className="text-emerald-600 ml-2">📧 {doc.client_email}</span>
+                        </p>
+                      </div>
+                      <a
+                        href={doc.document_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-600 hover:text-emerald-700 text-sm"
+                      >
+                        📄 View
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
